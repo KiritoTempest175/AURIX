@@ -1,0 +1,38 @@
+# AURIX AI Engine & Data Pipeline Dependencies
+
+# Core AI & ML Frameworks
+torch>=2.0.0
+transformers>=4.38.0
+tokenizers>=0.15.0
+datasets>=2.18.0
+huggingface-hub>=0.21.0
+safetensors>=0.4.2
+
+# Vector Store & AI Orchestration
+chromadb>=0.4.24
+sentence-transformers>=2.5.1
+pydantic>=2.6.0
+pydantic-settings>=2.2.0
+
+# Data Pipeline & Telemetry Storage
+sqlalchemy>=2.0.28
+pandas>=2.2.0
+numpy>=1.26.4
+polars>=0.20.0
+duckdb>=0.10.0
+
+# System Monitoring & Telemetry
+psutil>=5.9.8
+python-dotenv>=1.0.1
+tqdm>=4.66.2
+rich>=13.7.1
+
+# Async API & Communication Bridge
+fastapi>=0.110.0
+uvicorn>=0.28.0
+httpx>=0.27.0
+requests>=2.31.0
+
+# Testing & Quality Assurance
+pytest>=8.1.0
+pytest-asyncio>=0.23.5
