@@ -2,14 +2,14 @@
 -- Stores the history of terminal commands, UI actions, and their outcomes.
 -- Used by the Self-Healing Engine to diagnose errors and propose patches.
 CREATE TABLE IF NOT EXISTS execution_logs (
+    log_id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
     action_type TEXT NOT NULL, -- 'TERMINAL', 'UI_AUTOMATION', 'BACKGROUND_TASK'
     target_command TEXT NOT NULL,
     status TEXT NOT NULL, -- 'SUCCESS', 'FAILED', 'THROTTLED'
     return_code INTEGER,
-    error_traceback TEXT,
-    PRIMARY KEY (session_id, timestamp)
+    error_traceback TEXT
 );
 
 -- 2. Performance Time-Series Data
@@ -33,6 +33,6 @@ CREATE TABLE IF NOT EXISTS security_audit_trails (
     requested_path TEXT NOT NULL,
     operation_type TEXT NOT NULL, -- 'READ', 'WRITE', 'DELETE', 'EXECUTE'
     trust_token_id TEXT,
-    approval_status TEXT NOT NULL, -- 'APPROVED_BY_USER', 'REJECTED', 'AUTO_BLOCKED'
+    approval_status TEXT NOT NULL, -- 'APPROVED_BY_USER', 'REJECTED', 'AUTO_BLOCKED', 'PENDING'
     sandbox_enforced BOOLEAN NOT NULL DEFAULT 1
 );
