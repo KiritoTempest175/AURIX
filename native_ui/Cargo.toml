@@ -9,6 +9,10 @@ description = "Native Slint GUI & Audio Subsystem for AURIX"
 name = "native_ui"
 path = "lib.rs"
 
+[[bin]]
+name = "aurix"
+path = "main.rs"
+
 [dependencies]
 slint = "1.8"
 
