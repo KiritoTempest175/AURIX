@@ -1,0 +1,16 @@
+[package]
+name = "native_ui"
+version = "0.1.0"
+edition = "2021"
+authors = ["Zain"]
+description = "Native Slint GUI & Audio Subsystem for AURIX"
+
+[lib]
+name = "native_ui"
+path = "lib.rs"
+
+[dependencies]
+slint = "1.8"
+
+[build-dependencies]
+slint-build = "1.8"

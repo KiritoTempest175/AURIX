@@ -1,42 +1,56 @@
-# Python Virtual Environment
+# Rust Build & Target Outputs
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Python Virtual Environments
 .venv/
 venv/
 ENV/
 env/
 
-# Byte-compiled / optimized / DLL files
+# Python Bytecode & Cache
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
-*.so
-
-# Distribution / packaging
-build/
-devel/
-dist/
-downloads/
-eggs/
-.eggs/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# PyTest & Cache
 .pytest_cache/
 .coverage
 htmlcov/
+.ruff_cache/
+.mypy_cache/
 
-# Environment variables
+# Packaging & Distribution
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Environment Variables & Secrets
 .env
-.env.local
+.env.*
+!.env.example
 
-# IDEs
+# Vector Database & Telemetry Local Storage (ChromaDB, SQLite, etc.)
+chroma_data/
+chroma_db/
+.chroma/
+*.sqlite
+*.sqlite3
+*.db
+*.parquet
+!data_pipeline/storage/schema.sql
+
+# Checkpoints & Model Weights
+*.pt
+*.bin
+*.safetensors
+adapters/
+checkpoints/
+
+# IDE & OS Specific
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# Rust target directory
-target/
+.DS_Store
+Thumbs.db
