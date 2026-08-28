@@ -6,11 +6,11 @@ from pathlib import Path
 # Add project root directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 
-from data_pipeline.storage.log_connectors import UIQueryConnector
-from data_pipeline.storage.replay_buffer import ExperienceReplayBuffer
-from data_pipeline.vector_store.vector_db import SkillVectorStore
+from data_pipeline.storage.log_persistence import UIQueryConnector
+from data_pipeline.compiler.replay_buffer import ExperienceReplayBuffer
+from data_pipeline.vector_store.embedder import SkillVectorStore
 from data_pipeline.compiler.semantic_parser import SemanticCompiler
-from data_pipeline.self_healing.traceback_loop import SelfHealingEngine
+from data_pipeline.self_healing.error_diagnostics import SelfHealingEngine
 
 
 def run_master_pipeline_test():
