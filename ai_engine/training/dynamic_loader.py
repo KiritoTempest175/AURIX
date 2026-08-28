@@ -1,3 +1,1 @@
-"""
-Gradient accumulation & stream orchestration stub.
-"""
+# Placeholder for Huzaifa — Gradient accumulation & dynamic stream orchestration

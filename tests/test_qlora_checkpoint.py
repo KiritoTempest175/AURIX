@@ -1,3 +1,1 @@
-"""
-Verify zero-loss resume after CUDA eviction stub.
-"""
+# Placeholder for Huzaifa — Verify zero-loss resume after CUDA eviction
