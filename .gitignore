@@ -54,3 +54,10 @@ checkpoints/
 *.swo
 .DS_Store
 Thumbs.db
+
+# Scratch and Build Intermediates
+scratch/
+*.o
+*.a
+*.lib
+
