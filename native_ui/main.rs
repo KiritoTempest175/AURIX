@@ -1,7 +1,21 @@
 slint::include_modules!();
 
+#[path = "config.rs"]
+pub mod config;
+
+#[path = "audio/whisper_stt.rs"]
+pub mod whisper_stt;
+
+#[path = "audio/piper_tts.rs"]
+pub mod piper_tts;
+
+#[path = "bridge/event_binding.rs"]
+pub mod event_binding;
+
 use std::rc::Rc;
+use std::sync::Arc;
 use slint::Model;
+use event_binding::AurixAppBridge;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -262,6 +276,10 @@ fn get_system_uptime_formatted() -> String {
 fn main() -> Result<(), slint::PlatformError> {
     let ui = AurixCommandCenter::new()?;
 
+    // Initialize Central Application Bridge with TOML Configuration and Audio
+    let app_bridge = Arc::new(AurixAppBridge::initialize().expect("Failed to initialize AurixAppBridge"));
+    let bridge_cfg = app_bridge.config.read().unwrap();
+
     // Initial hardware & environment detection
     let (ram_frac, ram_disp, total_ram_gb) = get_ram_info();
     let (vram_gb, initial_temp) = detect_vram_and_temp();
@@ -280,8 +298,10 @@ fn main() -> Result<(), slint::PlatformError> {
 
     ui.set_ram_vram_display(format!("{} / {}", total_ram_gb, vram_gb).into());
     ui.set_budget_display("GB".into());
-    ui.set_offline_mode("ENABLED".into());
+    ui.set_offline_mode(if bridge_cfg.general.offline_mode { "ENABLED".into() } else { "DISABLED".into() });
     ui.set_resource_gov("NOMINAL".into());
+
+    drop(bridge_cfg);
 
     ui.set_uptime_display(get_system_uptime_formatted().into());
     ui.set_sessions_count("03".into());
@@ -311,43 +331,23 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
-    // Main 60ms timer loop for fluid audio waveform animation + live telemetry updates
-    let ui_handle = ui.as_weak();
+    // 1-second dynamic hardware telemetry refresh
+    let telemetry_ui = ui.as_weak();
     let timer = slint::Timer::default();
-    let mut cpu_tracker = CpuTracker::new();
-    let mut phase: f32 = 0.0;
-    let mut tick: u32 = 0;
+    timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(1000), move || {
+        if let Some(ui) = telemetry_ui.upgrade() {
+            let (date, time) = get_local_date_time();
+            ui.set_live_date(date.into());
+            ui.set_live_time(time.into());
 
-    timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(60), move || {
-        if let Some(ui) = ui_handle.upgrade() {
-            // Waveform animation phase increment
-            phase = (phase + 0.15) % std::f32::consts::TAU;
-            ui.set_anim_phase(phase);
-            tick += 1;
-
-            // Every ~1 second (16 ticks * 60ms ≈ 960ms): update real clock, CPU, RAM, Uptime
-            if tick % 16 == 0 {
-                let (d_str, t_str) = get_local_date_time();
-                ui.set_live_date(d_str.into());
-                ui.set_live_time(t_str.into());
-
-                // Real CPU sample
-                let cpu_val = cpu_tracker.sample();
-                let cpu_pct = (cpu_val * 100.0).round() as u32;
+            // Real CPU sample
+            if let Some(cpu_pct) = sample_cpu_load_percent() {
+                let cpu_val = (cpu_pct as f32 / 100.0).clamp(0.0, 1.0);
                 ui.set_cpu_usage(cpu_val);
                 ui.set_cpu_display(format!("{}%", cpu_pct).into());
 
                 // Real System Load
                 ui.set_system_load(cpu_val);
-                ui.set_system_load_display(format!("{}%", cpu_pct).into());
-
-                // Real RAM sample
-                let (r_frac, r_disp, _) = get_ram_info();
-                ui.set_ram_usage(r_frac);
-                ui.set_ram_display(r_disp.into());
-
-                // Real Uptime
-                ui.set_uptime_display(get_system_uptime_formatted().into());
             }
         }
     });
@@ -355,6 +355,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // Handle user messages
     let ui_msg = ui.as_weak();
     let model_msg = messages_model.clone();
+    let bridge_msg = Arc::clone(&app_bridge);
     ui.on_send_message(move |user_input| {
         if let Some(ui) = ui_msg.upgrade() {
             let input = user_input.trim();
@@ -396,9 +397,12 @@ fn main() -> Result<(), slint::PlatformError> {
             // Push AURIX response bubble
             model_msg.push(ChatMessage {
                 sender: "AURIX".into(),
-                text: response.into(),
+                text: response.clone().into(),
                 time: "".into(),
             });
+
+            // Dispatch speech synthesis via Piper TTS if enabled
+            bridge_msg.handle_speak(&response);
 
             ui.set_toast_message("Command executed by AURIX Core.".into());
             ui.set_toast_visible(true);
@@ -443,11 +447,18 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
-    // Handle Alert Modal Actions
+    // Handle Alert Modal Actions (Connected to Rust Event Dispatcher)
     let ui_alert_primary = ui.as_weak();
+    let bridge_alert_p = Arc::clone(&app_bridge);
     ui.on_alert_primary_action(move || {
         if let Some(ui) = ui_alert_primary.upgrade() {
-            println!("[A.U.R.I.X AlertModal]: Primary action acknowledged & isolated.");
+            let title = ui.get_alert_modal_title().to_string();
+            let _msg = ui.get_alert_modal_message().to_string();
+            println!("[A.U.R.I.X AlertModal]: Primary action invoked for '{}'", title);
+
+            // Dispatch typed alert event to Rust backend
+            bridge_alert_p.handle_alert_retry(title, "manual_recovery_action".into());
+
             ui.set_toast_message("Threat isolated and logged to security audit.".into());
             ui.set_toast_visible(true);
             let t = ui.as_weak();
@@ -458,9 +469,15 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     let ui_alert_secondary = ui.as_weak();
+    let bridge_alert_s = Arc::clone(&app_bridge);
     ui.on_alert_secondary_action(move || {
         if let Some(ui) = ui_alert_secondary.upgrade() {
-            println!("[A.U.R.I.X AlertModal]: Secondary action dismissed.");
+            let title = ui.get_alert_modal_title().to_string();
+            println!("[A.U.R.I.X AlertModal]: Secondary action dismissed for '{}'", title);
+
+            // Dispatch typed alert dismissal event to Rust backend
+            bridge_alert_s.handle_alert_dismiss(title);
+
             ui.set_toast_message("Alert dismissed.".into());
             ui.set_toast_visible(true);
             let t = ui.as_weak();
@@ -474,11 +491,24 @@ fn main() -> Result<(), slint::PlatformError> {
         println!("[A.U.R.I.X AlertModal]: Modal closed via ESC or backdrop.");
     });
 
-    // Handle Review Card Actions
+    // Handle Review Card Actions (Connected to Rust Event Dispatcher)
     let ui_rev_primary = ui.as_weak();
+    let bridge_rev_p = Arc::clone(&app_bridge);
     ui.on_review_primary_action(move || {
         if let Some(ui) = ui_rev_primary.upgrade() {
-            println!("[A.U.R.I.X ReviewCard]: Fix approved & applied.");
+            let title = ui.get_review_card_title().to_string();
+            let category = ui.get_review_card_category().to_string();
+            println!("[A.U.R.I.X ReviewCard]: Fix approved & applied for '{}'", title);
+
+            // Dispatch typed review approval event to Rust backend
+            bridge_rev_p.handle_review_approve(
+                title,
+                category,
+                "verified_kernel_action".into(),
+                ".".into(),
+                std::collections::HashMap::new(),
+            );
+
             ui.set_toast_message("Kernel partition realignment applied successfully.".into());
             ui.set_toast_visible(true);
             let t = ui.as_weak();
@@ -489,9 +519,15 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     let ui_rev_secondary = ui.as_weak();
+    let bridge_rev_s = Arc::clone(&app_bridge);
     ui.on_review_secondary_action(move || {
         if let Some(ui) = ui_rev_secondary.upgrade() {
-            println!("[A.U.R.I.X ReviewCard]: Review dismissed.");
+            let title = ui.get_review_card_title().to_string();
+            println!("[A.U.R.I.X ReviewCard]: Review dismissed for '{}'", title);
+
+            // Dispatch typed review rejection event to Rust backend
+            bridge_rev_s.handle_review_reject(title, "Dismissed from command center".into());
+
             ui.set_toast_message("Review item dismissed.".into());
             ui.set_toast_visible(true);
             let t = ui.as_weak();
@@ -512,6 +548,23 @@ fn main() -> Result<(), slint::PlatformError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+    use std::thread;
+    use std::time::Duration;
+    use event_binding::{AurixEventListener, AurixEvent, ReviewEvent, AlertEvent};
+    use config::{AurixConfig, SecurityConfig};
+
+    struct MockEventSink {
+        events: Arc<Mutex<Vec<AurixEvent>>>,
+    }
+
+    impl AurixEventListener for MockEventSink {
+        fn on_event(&self, event: &AurixEvent) {
+            if let Ok(mut list) = self.events.lock() {
+                list.push(event.clone());
+            }
+        }
+    }
 
     #[test]
     fn test_aurix_components_and_modals() {
@@ -555,6 +608,189 @@ mod tests {
         ui.set_review_modal_open(false);
         assert!(!ui.get_review_modal_open());
     }
+
+    #[test]
+    fn test_part_a_review_card_callbacks_reach_rust() {
+        let bridge = AurixAppBridge::initialize().expect("Failed to initialize app bridge");
+        let sink_events = Arc::new(Mutex::new(Vec::new()));
+
+        bridge.dispatcher.register_listener(MockEventSink {
+            events: Arc::clone(&sink_events),
+        });
+
+        // 1. Trigger Approve Callback
+        let mut params = std::collections::HashMap::new();
+        params.insert("ENV".to_string(), "prod".to_string());
+        bridge.handle_review_approve(
+            "Build Docker Container".into(),
+            "DEPLOYMENT".into(),
+            "docker compose up -d".into(),
+            "G:/AURIX".into(),
+            params.clone(),
+        );
+
+        // 2. Trigger Edit Callback
+        bridge.handle_review_edit(
+            "Build Docker Container".into(),
+            "docker compose up -d".into(),
+            params.clone(),
+        );
+
+        // 3. Trigger Reject Callback
+        bridge.handle_review_reject(
+            "Build Docker Container".into(),
+            "User cancelled deployment".into(),
+        );
+
+        thread::sleep(Duration::from_millis(150));
+
+        let events = sink_events.lock().unwrap();
+        assert_eq!(events.len(), 3);
+
+        match &events[0] {
+            AurixEvent::Review(ReviewEvent::Approved { action_title, command, .. }) => {
+                assert_eq!(action_title, "Build Docker Container");
+                assert_eq!(command, "docker compose up -d");
+            }
+            _ => panic!("Expected ReviewEvent::Approved"),
+        }
+
+        match &events[1] {
+            AurixEvent::Review(ReviewEvent::EditRequested { action_title, .. }) => {
+                assert_eq!(action_title, "Build Docker Container");
+            }
+            _ => panic!("Expected ReviewEvent::EditRequested"),
+        }
+
+        match &events[2] {
+            AurixEvent::Review(ReviewEvent::Rejected { action_title, reason }) => {
+                assert_eq!(action_title, "Build Docker Container");
+                assert_eq!(reason, "User cancelled deployment");
+            }
+            _ => panic!("Expected ReviewEvent::Rejected"),
+        }
+    }
+
+    #[test]
+    fn test_part_a_alert_modal_callbacks_reach_rust() {
+        let bridge = AurixAppBridge::initialize().expect("Failed to initialize app bridge");
+        let sink_events = Arc::new(Mutex::new(Vec::new()));
+
+        bridge.dispatcher.register_listener(MockEventSink {
+            events: Arc::clone(&sink_events),
+        });
+
+        // 1. Trigger Retry Callback
+        bridge.handle_alert_retry("Compilation Failed".into(), "cargo build".into());
+
+        // 2. Trigger Self-Healing Callback (5s Countdown)
+        bridge.handle_alert_self_heal("Link Error".into(), "cargo clean && cargo check".into(), 101);
+
+        // 3. Trigger Dismiss Callback
+        bridge.handle_alert_dismiss("Compilation Failed".into());
+
+        thread::sleep(Duration::from_millis(150));
+
+        let events = sink_events.lock().unwrap();
+        assert_eq!(events.len(), 3);
+
+        match &events[0] {
+            AurixEvent::Alert(AlertEvent::RetryRequested { error_title, failed_command }) => {
+                assert_eq!(error_title, "Compilation Failed");
+                assert_eq!(failed_command, "cargo build");
+            }
+            _ => panic!("Expected AlertEvent::RetryRequested"),
+        }
+
+        match &events[1] {
+            AurixEvent::Alert(AlertEvent::SelfHealTriggered { error_title, suggested_fix, exit_code }) => {
+                assert_eq!(error_title, "Link Error");
+                assert_eq!(suggested_fix, "cargo clean && cargo check");
+                assert_eq!(*exit_code, 101);
+            }
+            _ => panic!("Expected AlertEvent::SelfHealTriggered"),
+        }
+
+        match &events[2] {
+            AurixEvent::Alert(AlertEvent::Dismissed { error_title }) => {
+                assert_eq!(error_title, "Compilation Failed");
+            }
+            _ => panic!("Expected AlertEvent::Dismissed"),
+        }
+    }
+
+    #[test]
+    fn test_part_b_config_loading_and_parsing() {
+        let sample_toml = r#"
+[security]
+allowed_project_paths = ["G:/Websites By Ai/AURIX", "D:/Projects"]
+file_jail_enabled = true
+read_only_mode = false
+trust_token_required = true
+
+[audio]
+microphone = "System Default"
+whisper_model_path = "models/whisper/ggml-base.en.bin"
+whisper_language = "en"
+whisper_threads = 6
+voice = "Default"
+piper_model_path = "models/piper/en_US-lessac-medium.onnx"
+piper_speed = 1.1
+auto_tts_reply = true
+
+[resources]
+max_ram_gb = 14.0
+max_vram_gb = 7.0
+cpu_throttle_percent = 80.0
+poll_interval_ms = 800
+suspend_on_overload = true
+
+[general]
+theme = "command-center"
+offline_mode = true
+"#;
+
+        let config = AurixConfig::parse_toml(sample_toml).expect("Valid TOML should parse cleanly");
+        assert_eq!(config.resources.max_ram_gb, 14.0);
+        assert_eq!(config.resources.max_vram_gb, 7.0);
+        assert_eq!(config.audio.whisper_threads, 6);
+        assert_eq!(config.audio.piper_speed, 1.1);
+        assert_eq!(config.general.theme, "command-center");
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_part_b_invalid_toml_error_handling() {
+        let bad_toml = "[security\nallowed_project_paths = missing_bracket";
+        let result = AurixConfig::parse_toml(bad_toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_part_b_missing_config_fallback() {
+        let missing_path = std::path::PathBuf::from("non_existent_config_file_12345.toml");
+        let result = AurixConfig::load_from_path(&missing_path);
+        assert!(result.is_err());
+
+        // load_or_default should gracefully fallback without crashing
+        let fallback = AurixConfig::load_or_default();
+        assert_eq!(fallback.resources.max_ram_gb, 12.0);
+        assert!(fallback.security.file_jail_enabled);
+    }
+
+    #[test]
+    fn test_part_b_security_whitelist_validation() {
+        let mut sec_config = SecurityConfig::default();
+        let current_dir = std::env::current_dir().unwrap();
+        sec_config.allowed_project_paths = vec![current_dir.clone()];
+
+        // Inside whitelist
+        let valid_file = current_dir.join("Cargo.toml");
+        assert!(sec_config.is_path_allowed(&valid_file).is_ok());
+
+        // Escape attempt outside whitelist
+        let forbidden = std::path::PathBuf::from("C:/Windows/System32/calc.exe");
+        let forbidden_res = sec_config.is_path_allowed(&forbidden);
+        assert!(forbidden_res.is_err());
+    }
 }
-
-

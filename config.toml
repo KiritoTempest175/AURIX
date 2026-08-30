@@ -1,0 +1,40 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  A.U.R.I.X Desktop AI Agent — Local System Configuration
+# ═══════════════════════════════════════════════════════════════════════════
+
+[security]
+# Whitelisted project directories accessible to the AURIX agent
+allowed_project_paths = [
+    "G:/Websites By Ai/AURIX",
+    "C:/Users/Zain/Projects"
+]
+file_jail_enabled = true
+read_only_mode = false
+trust_token_required = true
+
+[audio]
+microphone = "Default"
+whisper_model_path = "models/whisper/ggml-base.en.bin"
+whisper_language = "en"
+whisper_threads = 4
+whisper_sample_rate = 16000
+voice = "Default"
+piper_model_path = "models/piper/en_US-lessac-medium.onnx"
+piper_config_path = "models/piper/en_US-lessac-medium.onnx.json"
+piper_speed = 1.00
+auto_tts_reply = true
+
+[resources]
+# Maximum host RAM ceiling in GB before Governor suspends AI operations (Blueprint ceiling: 12GB)
+max_ram_gb = 12.0
+# Maximum discrete GPU VRAM ceiling in GB (Blueprint ceiling: 6GB)
+max_vram_gb = 6.0
+cpu_throttle_percent = 85.0
+poll_interval_ms = 1000
+suspend_on_overload = true
+
+[general]
+theme = "dark"
+offline_mode = true
+log_level = "info"
+log_file = "logs/aurix_session.log"

@@ -2,10 +2,9 @@
 resolver = "2"
 members = [
     "core_engine",
-    "native_ui",
 ]
 exclude = [
-    "native_ui/Frontend",
+    "native_ui",
 ]
 
 [workspace.package]

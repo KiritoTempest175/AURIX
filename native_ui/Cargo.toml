@@ -1,13 +1,11 @@
+[workspace]
+
 [package]
-name = "native_ui"
+name = "aurix_command_center"
 version = "0.1.0"
 edition = "2021"
 authors = ["Zain"]
 description = "Native Slint GUI & Audio Subsystem for AURIX"
-
-[lib]
-name = "native_ui"
-path = "lib.rs"
 
 [[bin]]
 name = "aurix"
