@@ -7,6 +7,10 @@
 //    - AI Chat & Command Log Console Module
 // ═══════════════════════════════════════════════════════════════════════════
 import { LineEdit, ScrollView } from "std-widgets.slint";
+import { ReviewCard, ActionParam } from "../ui/components/review_card.slint";
+import { AlertModal } from "../ui/components/alert_modal.slint";
+
+export { ReviewCard, ActionParam, AlertModal }
 
 export struct ChatMessage {
     sender: string,
@@ -286,7 +290,6 @@ export component AurixCommandCenter inherits Window {
     in-out property <string> system-load-display:  "28%";
 
     in-out property <float>  anim-phase:       0.0;
-    in-out property <bool>   camera-active:    false;
     in-out property <bool>   microphone-active: true;
     in-out property <bool>   keyboard-active:  false;
 
@@ -607,7 +610,6 @@ export component AurixCommandCenter inherits Window {
                             // Media Toggles
                             HorizontalLayout {
                                 spacing: 10px; alignment: center;
-                                ControlToggle { icon: "◉"; label: "CAM"; active: root.camera-active; clicked => { root.camera-active = !root.camera-active; } }
                                 ControlToggle { icon: "♩"; label: "MIC"; active: root.microphone-active; clicked => { root.microphone-active = !root.microphone-active; } }
                                 ControlToggle { icon: "⌨"; label: "INPUT"; active: root.keyboard-active; clicked => { root.keyboard-active = !root.keyboard-active; } }
                             }
@@ -784,6 +786,65 @@ export component AurixCommandCenter inherits Window {
                 Rectangle { width: 6px; height: 6px; border-radius: 3px; background: #10b981; y: (parent.height - self.height) / 2; }
                 Text { text: root.toast-message; color: #bae6fd; font-size: 10px; font-weight: 600; vertical-alignment: center; }
             }
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  MODAL OVERLAYS (Review Card & Alert Modal)
+    // ════════════════════════════════════════════════════════════════════════
+    if root.review-modal-open: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000bb;
+        z: 90;
+
+        TouchArea {
+            clicked => {
+                root.review-modal-open = false;
+                root.review-modal-closed();
+            }
+        }
+
+        ReviewCard {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: Math.min(parent.width - 40px, 640px);
+            action-title: root.review-card-title;
+            action-category: root.review-card-category;
+            status-text: root.review-card-status;
+            risk-level: root.review-card-severity == "critical" ? "CRITICAL" :
+                        (root.review-card-severity == "warning" ? "MEDIUM" : "LOW");
+            approve => {
+                root.review-modal-open = false;
+                root.review-primary-action();
+            }
+            reject => {
+                root.review-modal-open = false;
+                root.review-secondary-action();
+            }
+            edit => {
+                // Future edit action
+            }
+        }
+    }
+
+    if root.alert-modal-open: AlertModal {
+        z: 100;
+        error-title: root.alert-modal-title;
+        error-message: root.alert-modal-message != "" ? root.alert-modal-message : "Subsystem sandbox intercepted boundary breach.";
+        severity: root.alert-modal-severity == "critical" ? "CRITICAL" :
+                  (root.alert-modal-severity == "warning" ? "WARNING" : "ERROR");
+        retry => {
+            root.alert-modal-open = false;
+            root.alert-primary-action();
+        }
+        cancel => {
+            root.alert-modal-open = false;
+            root.alert-secondary-action();
+        }
+        close => {
+            root.alert-modal-open = false;
+            root.alert-modal-closed();
         }
     }
 }

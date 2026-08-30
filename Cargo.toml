@@ -4,6 +4,9 @@ members = [
     "core_engine",
     "native_ui",
 ]
+exclude = [
+    "native_ui/Frontend",
+]
 
 [workspace.package]
 version = "0.1.0"

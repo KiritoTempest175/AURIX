@@ -1,4 +1,499 @@
-// 5-second self-healing override modal component stub
+// ─────────────────────────────────────────────────────────────────────────────
+// AURIX Desktop AI Agent — Native Slint UI: Alert Modal Component
+// ─────────────────────────────────────────────────────────────────────────────
+// Professional modal dialog for execution errors and AURIX self-healing.
+// Includes failed action inspection, diagnostic logs, recommended self-repair,
+// and a 5-second automated countdown indicator controllable by Rust runtime.
+// ─────────────────────────────────────────────────────────────────────────────
+
+component ModalButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon: "";
+    in property <color> text-color: #e2e8f0;
+    in property <color> base-background: #0f1f2e;
+    in property <color> hover-background: #172f44;
+    in property <color> pressed-background: #0a1722;
+    in property <color> border-color-normal: #1d3a4a;
+    in property <color> border-color-hover: #38bdf8;
+    in property <length> font-size: 12px;
+    in property <bool> is-primary: false;
+    callback clicked();
+
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: ta.pressed ? root.border-color-hover : (ta.has-hover ? root.border-color-hover : root.border-color-normal);
+    background: ta.pressed ? root.pressed-background : (ta.has-hover ? root.hover-background : root.base-background);
+    animate background { duration: 150ms; }
+    animate border-color { duration: 150ms; }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 6px;
+        alignment: center;
+
+        if root.icon != "": Text {
+            text: root.icon;
+            color: root.text-color;
+            font-size: root.font-size + 1px;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: root.text;
+            color: root.text-color;
+            font-size: root.font-size;
+            font-weight: root.is-primary ? 700 : 600;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
 export component AlertModal inherits Rectangle {
-    // Alert modal UI definitions
+    // ─── Data Properties (Exposed for Rust Dynamic Binding) ─────────────────
+    in property <string> error-title: "Command Execution Failure Detected";
+    in property <string> severity: "CRITICAL"; // "WARNING", "ERROR", "CRITICAL"
+    in property <string> failed-command: "cargo build --release --target x86_64-pc-windows-msvc";
+    in property <int> exit-code: 101;
+    in property <string> error-message: "error: linking with `link.exe` failed: exit code: 1181\nnote: LINK : fatal error LNK1181: cannot open input file 'windows.0.52.0.lib'\nerror: could not compile `native_ui` due to previous error";
+    in property <string> suggested-fix: "AURIX Self-Healing Engine recommends executing MSVC build toolchain sync and rebuilding Windows SDK link cache:\n`vcvars64.bat && cargo clean -p native_ui && cargo check`";
+    
+    // ─── Countdown & Self-Healing State (Controlled by Rust) ────────────────
+    in property <int> countdown-seconds: 5;
+    in property <float> countdown-progress: 1.0; // 1.0 (5s) to 0.0 (0s)
+    in property <bool> auto-heal-active: true;
+    in property <string> auto-heal-label: "Auto-Healing In";
+
+    // ─── Callback Events (Exposed for Rust Event System) ───────────────────
+    callback retry();
+    callback cancel();
+    callback toggle-auto-heal();
+    callback copy-error();
+    callback close();
+
+    // ─── Modal Backdrop ────────────────────────────────────────────────────
+    background: #000000bb;
+    width: 100%;
+    height: 100%;
+
+    // Dismiss click on backdrop outside card
+    TouchArea {
+        clicked => { root.close(); }
+    }
+
+    // ─── Modal Dialog Window Box ───────────────────────────────────────────
+    modal-card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: Math.min(parent.width - 40px, 620px);
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: root.severity == "CRITICAL" ? #dc2626 :
+                      root.severity == "ERROR" ? #ea580c : #f59e0b;
+        background: #0b1520;
+        clip: true;
+
+        // Prevent click-through from modal body
+        TouchArea { }
+
+        VerticalLayout {
+            padding: 18px;
+            spacing: 12px;
+
+            // ─── Header: Warning / Error Title & Severity ─────────────────
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: space-between;
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: start;
+
+                    // Warning Alert Icon Badge
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        border-radius: 6px;
+                        border-width: 1px;
+                        border-color: root.severity == "CRITICAL" ? #7f1d1d :
+                                      root.severity == "ERROR" ? #7c2d12 : #78350f;
+                        background: root.severity == "CRITICAL" ? #450a0a :
+                                    root.severity == "ERROR" ? #431407 : #451a03;
+                        vertical-stretch: 0;
+
+                        Text {
+                            text: root.severity == "CRITICAL" ? "✖" : "⚠";
+                            color: root.severity == "CRITICAL" ? #fca5a5 :
+                                   root.severity == "ERROR" ? #fdba74 : #fde68a;
+                            font-size: 16px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // Title & Subtitle
+                    VerticalLayout {
+                        spacing: 2px;
+                        alignment: center;
+
+                        Text {
+                            text: root.error-title;
+                            color: #f1f5f9;
+                            font-size: 15px;
+                            font-weight: 700;
+                        }
+
+                        Text {
+                            text: "AURIX FAULT DETECTION & AUTOMATED RECOVERY SYSTEM";
+                            color: #64748b;
+                            font-size: 9px;
+                            font-weight: 700;
+                        }
+                    }
+                }
+
+                // Severity & Close Actions
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+
+                    // Severity Badge
+                    Rectangle {
+                        height: 22px;
+                        border-radius: 4px;
+                        border-width: 1px;
+                        border-color: root.severity == "CRITICAL" ? #991b1b :
+                                      root.severity == "ERROR" ? #c2410c : #d97706;
+                        background: root.severity == "CRITICAL" ? #450a0a :
+                                    root.severity == "ERROR" ? #431407 : #451a03;
+                        y: (parent.height - self.height) / 2;
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            alignment: center;
+                            Text {
+                                text: root.severity;
+                                color: root.severity == "CRITICAL" ? #fca5a5 :
+                                       root.severity == "ERROR" ? #fdba74 : #fde68a;
+                                font-size: 10px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    // Close Button
+                    Rectangle {
+                        width: 24px;
+                        height: 24px;
+                        border-radius: 4px;
+                        border-width: 1px;
+                        border-color: #1e3344;
+                        background: #0f2231;
+                        y: (parent.height - self.height) / 2;
+
+                        Text {
+                            text: "✕";
+                            color: #94a3b8;
+                            font-size: 11px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        TouchArea {
+                            clicked => { root.close(); }
+                        }
+                    }
+                }
+            }
+
+            // ─── Divider ──────────────────────────────────────────────────
+            Rectangle {
+                height: 1px;
+                background: #172d3e;
+            }
+
+            // ─── Failed Action / Command Section ──────────────────────────
+            VerticalLayout {
+                spacing: 4px;
+
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text {
+                        text: "FAILED ACTION / COMMAND";
+                        color: #64748b;
+                        font-size: 10px;
+                        font-weight: 700;
+                    }
+
+                    Text {
+                        text: "EXIT CODE: " + root.exit-code;
+                        color: #f87171;
+                        font-size: 10px;
+                        font-weight: 700;
+                    }
+                }
+
+                Rectangle {
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: #3b1820;
+                    background: #060a10;
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        padding-top: 8px;
+                        padding-bottom: 8px;
+                        spacing: 8px;
+                        alignment: start;
+
+                        Text {
+                            text: "!";
+                            color: #f87171;
+                            font-size: 12px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: root.failed-command;
+                            color: #fca5a5;
+                            font-size: 11px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+
+            // ─── Error Message / Traceback Details ────────────────────────
+            VerticalLayout {
+                spacing: 4px;
+
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text {
+                        text: "ERROR DIAGNOSTIC LOG";
+                        color: #64748b;
+                        font-size: 10px;
+                        font-weight: 700;
+                    }
+
+                    Rectangle {
+                        height: 18px;
+                        border-radius: 3px;
+                        border-width: 1px;
+                        border-color: #1d3648;
+                        background: #0d202e;
+
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            alignment: center;
+                            Text {
+                                text: "📋 Copy Log";
+                                color: #94a3b8;
+                                font-size: 9px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        TouchArea {
+                            clicked => { root.copy-error(); }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: #172a38;
+                    background: #04090f;
+
+                    HorizontalLayout {
+                        padding: 10px;
+                        alignment: start;
+
+                        Text {
+                            text: root.error-message;
+                            color: #cbd5e1;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+
+            // ─── Suggested Fix (AURIX Self-Healing) ───────────────────────
+            VerticalLayout {
+                spacing: 4px;
+
+                Text {
+                    text: "AURIX SELF-HEALING RECOMMENDATION";
+                    color: #38bdf8;
+                    font-size: 10px;
+                    font-weight: 700;
+                }
+
+                Rectangle {
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: #0369a1;
+                    background: #061c2b;
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        padding-top: 8px;
+                        padding-bottom: 8px;
+                        spacing: 8px;
+                        alignment: start;
+
+                        Text {
+                            text: "💡";
+                            font-size: 12px;
+                            vertical-alignment: top;
+                        }
+
+                        Text {
+                            text: root.suggested-fix;
+                            color: #bae6fd;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+
+            // ─── 5-Second Countdown & Progress Indicator ─────────────────
+            Rectangle {
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: #152d3f;
+                background: #091723;
+
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 6px;
+
+                    HorizontalLayout {
+                        alignment: space-between;
+
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+
+                            Text {
+                                text: "⏱";
+                                color: root.auto-heal-active ? #38bdf8 : #64748b;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+
+                            Text {
+                                text: root.auto-heal-active ?
+                                      (root.auto-heal-label + " " + root.countdown-seconds + "s (Automated Fix)") :
+                                      "Automated self-healing paused by user";
+                                color: root.auto-heal-active ? #e2e8f0 : #94a3b8;
+                                font-size: 11px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        // Pause/Resume Auto-Heal Button
+                        Rectangle {
+                            height: 20px;
+                            border-radius: 3px;
+                            border-width: 1px;
+                            border-color: #1d3a4e;
+                            background: #0f2333;
+
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                alignment: center;
+                                Text {
+                                    text: root.auto-heal-active ? "Pause" : "Resume";
+                                    color: #38bdf8;
+                                    font-size: 10px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            TouchArea {
+                                clicked => { root.toggle-auto-heal(); }
+                            }
+                        }
+                    }
+
+                    // Static countdown progress bar
+                    Rectangle {
+                        height: 4px;
+                        border-radius: 2px;
+                        background: #0d2232;
+
+                        Rectangle {
+                            x: 0px;
+                            y: 0px;
+                            width: parent.width * Math.clamp(root.countdown-progress, 0.0, 1.0);
+                            height: parent.height;
+                            border-radius: 2px;
+                            background: root.auto-heal-active ? #0284c7 : #475569;
+                            animate width { duration: 100ms; }
+                        }
+                    }
+                }
+            }
+
+            // ─── Modal Action Buttons Footer ─────────────────────────────
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: end;
+
+                // Cancel Button
+                ModalButton {
+                    text: "Cancel & Abort";
+                    icon: "✕";
+                    text-color: #94a3b8;
+                    base-background: #0e1c28;
+                    hover-background: #172d3f;
+                    pressed-background: #0a151f;
+                    border-color-normal: #1f3b4f;
+                    border-color-hover: #64748b;
+                    clicked => { root.cancel(); }
+                }
+
+                // Retry / Auto-Heal Button
+                ModalButton {
+                    text: root.auto-heal-active ? ("Auto-Heal & Retry (" + root.countdown-seconds + "s)") : "Execute Self-Healing Fix";
+                    icon: "↻";
+                    is-primary: true;
+                    text-color: #ffffff;
+                    base-background: #0284c7;
+                    hover-background: #0369a1;
+                    pressed-background: #075985;
+                    border-color-normal: #38bdf8;
+                    border-color-hover: #7dd3fc;
+                    clicked => { root.retry(); }
+                }
+            }
+        }
+    }
 }

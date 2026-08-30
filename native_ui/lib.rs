@@ -1,3 +1,5 @@
+pub mod config;
+
 #[path = "audio/whisper_stt.rs"]
 pub mod whisper_stt;
 

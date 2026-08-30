@@ -7,6 +7,10 @@
 //    - AI Chat & Command Log Console Module
 // ═══════════════════════════════════════════════════════════════════════════
 import { LineEdit, ScrollView } from "std-widgets.slint";
+import { ReviewCard, ActionParam } from "components/review_card.slint";
+import { AlertModal } from "components/alert_modal.slint";
+
+export { ReviewCard, ActionParam, AlertModal }
 
 export struct ChatMessage {
     sender: string,
@@ -285,10 +289,16 @@ export component AurixCommandCenter inherits Window {
     in-out property <float>  system-load:           0.28;
     in-out property <string> system-load-display:  "28%";
 
+<<<<<<< Updated upstream
     in-out property <float>  anim-phase:       0.0;
     in-out property <bool>   camera-active:    false;
     in-out property <bool>   microphone-active: true;
     in-out property <bool>   keyboard-active:  false;
+=======
+    in-out property <float> anim-phase: 0.0;
+    in-out property <bool> microphone-active: true;
+    in-out property <bool> keyboard-active: false;
+>>>>>>> Stashed changes
 
     Timer {
         interval: 33ms;
@@ -305,6 +315,7 @@ export component AurixCommandCenter inherits Window {
         { sender: "AURIX", text: "A.U.R.I.X modular dashboard initialized. All subsystems online and ready for your command.", time: "" }
     ];
 
+<<<<<<< Updated upstream
     // ── Modal-state properties (kept for Rust backend compatibility) ─────────
     in-out property <bool>   alert-modal-open:     false;
     in-out property <string> alert-modal-title:    "Security Directive Alert";
@@ -340,6 +351,20 @@ export component AurixCommandCenter inherits Window {
     callback review-primary-action();
     callback review-secondary-action();
     callback review-modal-closed();
+=======
+    in-out property <bool> review-card-visible: false;
+    in-out property <bool> alert-modal-visible: false;
+
+    callback send-message(string);
+    callback clear-conversation();
+    callback export-conversation();
+    callback review-approve();
+    callback review-edit();
+    callback review-reject();
+    callback alert-retry();
+    callback alert-cancel();
+    callback alert-close();
+>>>>>>> Stashed changes
 
     // ── Global ESC key handler (modal compat) ────────────────────────────────
     forward-focus: ks;
@@ -792,6 +817,53 @@ export component AurixCommandCenter inherits Window {
                 Rectangle { width: 6px; height: 6px; border-radius: 3px; background: #10b981; y: (parent.height - self.height) / 2; }
                 Text { text: root.toast-message; color: #bae6fd; font-size: 10px; font-weight: 600; vertical-alignment: center; }
             }
+        }
+    }
+
+    // Review Card Overlay (Approval Modal Dialog)
+    if root.review-card-visible: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000bb;
+        z: 30;
+
+        // Dismiss when clicking outside
+        TouchArea {
+            clicked => { root.review-card-visible = false; }
+        }
+
+        ReviewCard {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: Math.min(parent.width - 40px, 640px);
+            approve => {
+                root.review-card-visible = false;
+                root.review-approve();
+            }
+            edit => {
+                root.review-edit();
+            }
+            reject => {
+                root.review-card-visible = false;
+                root.review-reject();
+            }
+        }
+    }
+
+    // Alert Modal Overlay (Self-Healing Modal Dialog)
+    if root.alert-modal-visible: AlertModal {
+        z: 40;
+        retry => {
+            root.alert-modal-visible = false;
+            root.alert-retry();
+        }
+        cancel => {
+            root.alert-modal-visible = false;
+            root.alert-cancel();
+        }
+        close => {
+            root.alert-modal-visible = false;
+            root.alert-close();
         }
     }
 }

@@ -1,4 +1,516 @@
-// Dynamic variable approval card component stub
+// ─────────────────────────────────────────────────────────────────────────────
+// AURIX Desktop AI Agent — Native Slint UI: Review Card Component
+// ─────────────────────────────────────────────────────────────────────────────
+// Reusable developer-tool card for reviewing and approving automated tasks,
+// system commands, parameters, and risk assessments prior to execution.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export struct ActionParam {
+    key: string,
+    value: string,
+}
+
+component IconButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon: "";
+    in property <color> text-color: #e2e8f0;
+    in property <color> base-background: #0f1f2e;
+    in property <color> hover-background: #172f44;
+    in property <color> pressed-background: #0a1722;
+    in property <color> border-color-normal: #1d3a4a;
+    in property <color> border-color-hover: #38bdf8;
+    in property <length> font-size: 12px;
+    in property <bool> is-primary: false;
+    callback clicked();
+
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: ta.pressed ? root.border-color-hover : (ta.has-hover ? root.border-color-hover : root.border-color-normal);
+    background: ta.pressed ? root.pressed-background : (ta.has-hover ? root.hover-background : root.base-background);
+    animate background { duration: 150ms; }
+    animate border-color { duration: 150ms; }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 6px;
+        alignment: center;
+
+        if root.icon != "": Text {
+            text: root.icon;
+            color: root.text-color;
+            font-size: root.font-size + 1px;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: root.text;
+            color: root.text-color;
+            font-size: root.font-size;
+            font-weight: root.is-primary ? 700 : 600;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
 export component ReviewCard inherits Rectangle {
-    // Review card UI definitions
+    // ─── Data Properties (Exposed for Rust Dynamic Binding) ─────────────────
+    in property <string> action-title: "Deploy Microservice Cluster";
+    in property <string> action-category: "AUTOMATION WORKFLOW";
+    in property <string> action-description: "Initialize Docker container network, synchronize database migration schemas, and start local development microservices.";
+    in property <string> project-path: "/workspaces/aurix-agent/services/backend";
+    in property <string> command: "docker compose -f docker-compose.dev.yml up -d --build && npm run migrate:latest";
+    in property <string> risk-level: "LOW"; // "LOW", "MEDIUM", "HIGH", "CRITICAL"
+    in property <string> risk-details: "Modifies local container runtime and updates database schemas on localhost:5432.";
+    in property <string> status-text: "Awaiting User Approval";
+    in property <[ActionParam]> parameters: [
+        { key: "ENVIRONMENT", value: "development" },
+        { key: "TARGET_PORT", value: "8080" },
+        { key: "DB_SCHEMA", value: "public_v2" },
+        { key: "AUTO_RESTART", value: "always" }
+    ];
+
+    // ─── Callback Events (Exposed for Rust Event System) ───────────────────
+    callback approve();
+    callback edit();
+    callback reject();
+    callback copy-command();
+    callback copy-path();
+
+    // ─── Appearance Styling ────────────────────────────────────────────────
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: root.risk-level == "CRITICAL" ? #dc2626 :
+                  root.risk-level == "HIGH" ? #ef4444 :
+                  root.risk-level == "MEDIUM" ? #f59e0b : #1e3b4d;
+    background: #0a1622;
+    clip: true;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        // ─── Header Section ──────────────────────────────────────────────
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: space-between;
+
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+
+                // Category & Title
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: center;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+
+                        // Type badge
+                        Rectangle {
+                            height: 18px;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: #1e3a4a;
+                            background: #0d202e;
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                alignment: center;
+                                Text {
+                                    text: root.action-category;
+                                    color: #38bdf8;
+                                    font-size: 9px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        // Status pill
+                        Rectangle {
+                            height: 18px;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: #274052;
+                            background: #122433;
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                alignment: center;
+                                Text {
+                                    text: root.status-text;
+                                    color: #94a3b8;
+                                    font-size: 9px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: root.action-title;
+                        color: #f1f5f9;
+                        font-size: 15px;
+                        font-weight: 700;
+                    }
+                }
+            }
+
+            // Risk Indicator Badge (Static Colors, No Gradients)
+            Rectangle {
+                height: 24px;
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: root.risk-level == "CRITICAL" ? #991b1b :
+                              root.risk-level == "HIGH" ? #dc2626 :
+                              root.risk-level == "MEDIUM" ? #d97706 : #059669;
+                background: root.risk-level == "CRITICAL" ? #450a0a :
+                            root.risk-level == "HIGH" ? #450a0a :
+                            root.risk-level == "MEDIUM" ? #451a03 : #064e3b;
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 4px;
+                    alignment: center;
+
+                    Text {
+                        text: root.risk-level == "CRITICAL" ? "✖" :
+                              root.risk-level == "HIGH" ? "▲" :
+                              root.risk-level == "MEDIUM" ? "⚠" : "✓";
+                        color: root.risk-level == "CRITICAL" ? #fca5a5 :
+                               root.risk-level == "HIGH" ? #fca5a5 :
+                               root.risk-level == "MEDIUM" ? #fde68a : #6ee7b7;
+                        font-size: 10px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: "RISK: " + root.risk-level;
+                        color: root.risk-level == "CRITICAL" ? #fca5a5 :
+                               root.risk-level == "HIGH" ? #fca5a5 :
+                               root.risk-level == "MEDIUM" ? #fde68a : #6ee7b7;
+                        font-size: 10px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // ─── Divider Line ────────────────────────────────────────────────
+        Rectangle {
+            height: 1px;
+            background: #162b3a;
+        }
+
+        // ─── Action Description ──────────────────────────────────────────
+        Text {
+            text: root.action-description;
+            color: #94a3b8;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+
+        // ─── Project Path Row ────────────────────────────────────────────
+        Rectangle {
+            height: 30px;
+            border-radius: 5px;
+            border-width: 1px;
+            border-color: #162a39;
+            background: #08131e;
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 8px;
+                alignment: start;
+
+                Text {
+                    text: "PATH:";
+                    color: #64748b;
+                    font-size: 10px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: root.project-path;
+                    color: #38bdf8;
+                    font-size: 11px;
+                    font-weight: 500;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+
+                Rectangle {
+                    width: 22px;
+                    height: 20px;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: #1d3648;
+                    background: #0f2231;
+                    y: (parent.height - self.height) / 2;
+
+                    Text {
+                        text: "📋";
+                        color: #94a3b8;
+                        font-size: 10px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    TouchArea {
+                        clicked => { root.copy-path(); }
+                    }
+                }
+            }
+        }
+
+        // ─── Dynamic Parameters Section ──────────────────────────────────
+        if root.parameters.length > 0 : VerticalLayout {
+            spacing: 6px;
+
+            Text {
+                text: "DYNAMIC PARAMETERS";
+                color: #64748b;
+                font-size: 10px;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: #162b3a;
+                background: #07121b;
+
+                VerticalLayout {
+                    padding: 6px;
+                    spacing: 4px;
+
+                    for param in root.parameters: HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+
+                        Rectangle {
+                            width: 120px;
+                            height: 22px;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: #1a3344;
+                            background: #0d1e2b;
+
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                alignment: start;
+                                Text {
+                                    text: param.key;
+                                    color: #7dd3fc;
+                                    font-size: 10px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            height: 22px;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: #172d3d;
+                            background: #091723;
+
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                alignment: start;
+                                Text {
+                                    text: param.value;
+                                    color: #e2e8f0;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ─── Command Preview Section ─────────────────────────────────────
+        VerticalLayout {
+            spacing: 4px;
+
+            HorizontalLayout {
+                alignment: space-between;
+                Text {
+                    text: "COMMAND TO EXECUTE";
+                    color: #64748b;
+                    font-size: 10px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "SHELL: NATIVE / PWSH";
+                    color: #475569;
+                    font-size: 9px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: #162b3a;
+                background: #040a10;
+
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 8px;
+                    padding-top: 8px;
+                    padding-bottom: 8px;
+                    spacing: 8px;
+                    alignment: start;
+
+                    Text {
+                        text: "$";
+                        color: #38bdf8;
+                        font-size: 12px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: root.command;
+                        color: #38bdf8;
+                        font-size: 11px;
+                        font-weight: 500;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        wrap: word-wrap;
+                    }
+
+                    Rectangle {
+                        width: 24px;
+                        height: 24px;
+                        border-radius: 4px;
+                        border-width: 1px;
+                        border-color: #1b3547;
+                        background: #0d1e2b;
+                        y: (parent.height - self.height) / 2;
+
+                        Text {
+                            text: "📋";
+                            color: #94a3b8;
+                            font-size: 11px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        TouchArea {
+                            clicked => { root.copy-command(); }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ─── Risk / Status Detail Bar ────────────────────────────────────
+        Rectangle {
+            height: 28px;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: #193244;
+            background: #091926;
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 8px;
+                alignment: start;
+
+                Text {
+                    text: "SECURITY NOTE:";
+                    color: #64748b;
+                    font-size: 10px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: root.risk-details;
+                    color: #94a3b8;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+            }
+        }
+
+        // ─── Action Buttons Footer ───────────────────────────────────────
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: end;
+
+            // Edit Button (Secondary)
+            IconButton {
+                text: "Edit Parameters";
+                icon: "✏";
+                text-color: #94a3b8;
+                base-background: #0c1c28;
+                hover-background: #162e40;
+                pressed-background: #08141d;
+                border-color-normal: #1d3b4d;
+                border-color-hover: #38bdf8;
+                clicked => { root.edit(); }
+            }
+
+            // Reject Button (Destructive)
+            IconButton {
+                text: "Reject Action";
+                icon: "✕";
+                text-color: #f87171;
+                base-background: #1c1017;
+                hover-background: #2d1622;
+                pressed-background: #140b10;
+                border-color-normal: #4c1d29;
+                border-color-hover: #ef4444;
+                clicked => { root.reject(); }
+            }
+
+            // Approve Button (Primary Solid)
+            IconButton {
+                text: "Approve & Execute";
+                icon: "✓";
+                is-primary: true;
+                text-color: #ffffff;
+                base-background: #0284c7;
+                hover-background: #0369a1;
+                pressed-background: #075985;
+                border-color-normal: #38bdf8;
+                border-color-hover: #7dd3fc;
+                clicked => { root.approve(); }
+            }
+        }
+    }
 }
