@@ -208,6 +208,35 @@ impl Default for GeneralConfig {
     }
 }
 
+// ─── LLM Configuration Section ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LlmConfig {
+    pub model_name: String,
+    pub model_alias: String,
+    pub max_seq_length: usize,
+    pub load_in_4bit: bool,
+    pub quantization: String,
+    pub device: String,
+    pub temperature: f32,
+    pub top_p: f32,
+}
+
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            model_name: "unsloth/Qwen3-4B".to_string(),
+            model_alias: "Qwen 3 4B".to_string(),
+            max_seq_length: 2048,
+            load_in_4bit: true,
+            quantization: "nf4".to_string(),
+            device: "cuda".to_string(),
+            temperature: 0.7,
+            top_p: 0.9,
+        }
+    }
+}
+
 // ─── Root AURIX Configuration ───────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -216,6 +245,7 @@ pub struct AurixConfig {
     pub audio: AudioConfig,
     pub resources: ResourceConfig,
     pub general: GeneralConfig,
+    pub llm: LlmConfig,
 }
 
 impl AurixConfig {
@@ -389,7 +419,18 @@ impl AurixConfig {
         out.push_str(&format!("theme = \"{}\"\n", self.general.theme));
         out.push_str(&format!("offline_mode = {}\n", self.general.offline_mode));
         out.push_str(&format!("log_level = \"{}\"\n", self.general.log_level));
-        out.push_str(&format!("log_file = \"{}\"\n", self.general.log_file.to_string_lossy().replace('\\', "/")));
+        out.push_str(&format!("log_file = \"{}\"\n\n", self.general.log_file.to_string_lossy().replace('\\', "/")));
+
+        // [llm]
+        out.push_str("[llm]\n");
+        out.push_str(&format!("model_name = \"{}\"\n", self.llm.model_name));
+        out.push_str(&format!("model_alias = \"{}\"\n", self.llm.model_alias));
+        out.push_str(&format!("max_seq_length = {}\n", self.llm.max_seq_length));
+        out.push_str(&format!("load_in_4bit = {}\n", self.llm.load_in_4bit));
+        out.push_str(&format!("quantization = \"{}\"\n", self.llm.quantization));
+        out.push_str(&format!("device = \"{}\"\n", self.llm.device));
+        out.push_str(&format!("temperature = {:.2}\n", self.llm.temperature));
+        out.push_str(&format!("top_p = {:.2}\n", self.llm.top_p));
 
         out
     }
@@ -628,6 +669,38 @@ impl AurixConfig {
             }
             ("general", "log_file") => {
                 config.general.log_file = PathBuf::from(value);
+            }
+
+            // [llm]
+            ("llm", "model_name") => {
+                config.llm.model_name = value.to_string();
+            }
+            ("llm", "model_alias") => {
+                config.llm.model_alias = value.to_string();
+            }
+            ("llm", "max_seq_length") => {
+                config.llm.max_seq_length = value.parse::<usize>().map_err(|_| {
+                    ConfigError::ParseError(format!("Invalid integer for max_seq_length at line {}", line_num))
+                })?;
+            }
+            ("llm", "load_in_4bit") => {
+                config.llm.load_in_4bit = parse_bool(value, line_num)?;
+            }
+            ("llm", "quantization") => {
+                config.llm.quantization = value.to_string();
+            }
+            ("llm", "device") => {
+                config.llm.device = value.to_string();
+            }
+            ("llm", "temperature") => {
+                config.llm.temperature = value.parse::<f32>().map_err(|_| {
+                    ConfigError::ParseError(format!("Invalid float for temperature at line {}", line_num))
+                })?;
+            }
+            ("llm", "top_p") => {
+                config.llm.top_p = value.parse::<f32>().map_err(|_| {
+                    ConfigError::ParseError(format!("Invalid float for top_p at line {}", line_num))
+                })?;
             }
 
             // Unknown or unsectioned keys

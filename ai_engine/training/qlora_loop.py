@@ -26,19 +26,50 @@
 
 import os
 import torch
-from unsloth import FastLanguageModel
-from transformers import TrainingArguments, TrainerCallback
-from trl import SFTTrainer
+try:
+    from unsloth import FastLanguageModel
+    HAS_UNSLOTH = True
+except ImportError:
+    FastLanguageModel = None
+    HAS_UNSLOTH = False
+
+try:
+    from transformers import TrainingArguments, TrainerCallback
+    from trl import SFTTrainer
+except ImportError:
+    TrainingArguments = None
+    TrainerCallback = object
+    SFTTrainer = None
+
 from ai_engine.training.memory_manager import GracefulMemoryManager
 from ai_engine.training.dynamic_loader import DynamicTelemetryDataset
 
 
 # ─── Blueprint Constants ─────────────────────────────────────────────────────
 
+def _load_model_config():
+    cfg_path = "./config.toml"
+    defaults = {"model_name": "unsloth/Qwen3-4B", "max_seq_length": 2048, "load_in_4bit": True}
+    if os.path.exists(cfg_path):
+        try:
+            try:
+                import tomllib
+            except ImportError:
+                import tomli as tomllib
+            with open(cfg_path, "rb") as f:
+                parsed = tomllib.load(f)
+                if "llm" in parsed:
+                    defaults.update(parsed["llm"])
+        except Exception:
+            pass
+    return defaults
+
+_llm_cfg = _load_model_config()
+
 # Model configuration
-MODEL_NAME = "unsloth/Qwen3-4B"         # 4B param base model (fits in 4-bit on 8GB)
-MAX_SEQ_LENGTH = 2048                    # Context window — 2K tokens balances quality vs VRAM
-LOAD_IN_4BIT = True                      # NF4 quantisation via bitsandbytes
+MODEL_NAME = _llm_cfg.get("model_name", "unsloth/Qwen3-4B")  # Qwen 3 4B base model
+MAX_SEQ_LENGTH = int(_llm_cfg.get("max_seq_length", 2048))  # Context window — 2K tokens
+LOAD_IN_4BIT = bool(_llm_cfg.get("load_in_4bit", True))     # NF4 quantisation via bitsandbytes
 
 # LoRA adapter configuration
 LORA_R = 16                              # Rank — lower = less VRAM, higher = more capacity

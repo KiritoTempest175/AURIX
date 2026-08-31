@@ -37,8 +37,12 @@ chroma_db/
 *.sqlite
 *.sqlite3
 *.db
+*.db-journal
+*.db-shm
+*.db-wal
 *.parquet
 !data_pipeline/storage/schema.sql
+test_checkpoint_tmp/
 
 # Checkpoints & Model Weights
 *.pt

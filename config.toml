@@ -38,3 +38,14 @@ theme = "dark"
 offline_mode = true
 log_level = "info"
 log_file = "logs/aurix_session.log"
+
+[llm]
+model_name = "unsloth/Qwen3-4B"
+model_alias = "Qwen 3 4B"
+max_seq_length = 2048
+load_in_4bit = true
+quantization = "nf4"
+device = "cuda"
+temperature = 0.7
+top_p = 0.9
+

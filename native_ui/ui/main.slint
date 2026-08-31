@@ -309,7 +309,7 @@ export component AurixCommandCenter inherits Window {
         { sender: "AURIX", text: "A.U.R.I.X modular dashboard initialized. All subsystems online and ready for your command.", time: "" }
     ];
 
-    // ── Modal-state properties (kept for Rust backend compatibility) ─────────
+    // ── Modal-state properties ───────────────────────────────────────────────
     in-out property <bool>   alert-modal-open:     false;
     in-out property <bool>   alert-modal-visible:  false;
     in-out property <string> alert-modal-title:    "Security Directive Alert";
@@ -343,15 +343,16 @@ export component AurixCommandCenter inherits Window {
     callback alert-primary-action();
     callback alert-secondary-action();
     callback alert-modal-closed();
-    callback alert-retry();
-    callback alert-cancel();
-    callback alert-close();
     callback review-primary-action();
     callback review-secondary-action();
     callback review-modal-closed();
+
     callback review-approve();
     callback review-edit();
     callback review-reject();
+    callback alert-retry();
+    callback alert-cancel();
+    callback alert-close();
 
     // ── Global ESC key handler (modal compat) ────────────────────────────────
     forward-focus: ks;
