@@ -125,5 +125,9 @@ def run_master_pipeline_test():
     print("=" * 65)
 
 
+def test_master_pipeline():
+    run_master_pipeline_test()
+
+
 if __name__ == "__main__":
     run_master_pipeline_test()
