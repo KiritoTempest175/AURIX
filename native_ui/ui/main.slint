@@ -10,7 +10,7 @@ import { LineEdit, ScrollView } from "std-widgets.slint";
 import { ReviewCard, ActionParam } from "components/review_card.slint";
 import { AlertModal } from "components/alert_modal.slint";
 
-export { ReviewCard, ActionParam, AlertModal }
+export { ActionParam }
 
 export struct ChatMessage {
     sender: string,
@@ -289,16 +289,10 @@ export component AurixCommandCenter inherits Window {
     in-out property <float>  system-load:           0.28;
     in-out property <string> system-load-display:  "28%";
 
-<<<<<<< Updated upstream
     in-out property <float>  anim-phase:       0.0;
     in-out property <bool>   camera-active:    false;
     in-out property <bool>   microphone-active: true;
     in-out property <bool>   keyboard-active:  false;
-=======
-    in-out property <float> anim-phase: 0.0;
-    in-out property <bool> microphone-active: true;
-    in-out property <bool> keyboard-active: false;
->>>>>>> Stashed changes
 
     Timer {
         interval: 33ms;
@@ -315,9 +309,9 @@ export component AurixCommandCenter inherits Window {
         { sender: "AURIX", text: "A.U.R.I.X modular dashboard initialized. All subsystems online and ready for your command.", time: "" }
     ];
 
-<<<<<<< Updated upstream
     // ── Modal-state properties (kept for Rust backend compatibility) ─────────
     in-out property <bool>   alert-modal-open:     false;
+    in-out property <bool>   alert-modal-visible:  false;
     in-out property <string> alert-modal-title:    "Security Directive Alert";
     in-out property <string> alert-modal-subtitle: "SYSTEM MONITOR // PRIORITY OVERRIDE";
     in-out property <string> alert-modal-severity: "critical";
@@ -329,6 +323,7 @@ export component AurixCommandCenter inherits Window {
     in-out property <string> alert-modal-secondary-text:  "Dismiss";
 
     in-out property <bool>   review-modal-open:        false;
+    in-out property <bool>   review-card-visible:      false;
     in-out property <string> review-card-category:     "SYSTEM INTEGRITY";
     in-out property <string> review-card-title:        "Kernel Memory Alignment Check";
     in-out property <string> review-card-severity:     "warning";
@@ -348,23 +343,15 @@ export component AurixCommandCenter inherits Window {
     callback alert-primary-action();
     callback alert-secondary-action();
     callback alert-modal-closed();
-    callback review-primary-action();
-    callback review-secondary-action();
-    callback review-modal-closed();
-=======
-    in-out property <bool> review-card-visible: false;
-    in-out property <bool> alert-modal-visible: false;
-
-    callback send-message(string);
-    callback clear-conversation();
-    callback export-conversation();
-    callback review-approve();
-    callback review-edit();
-    callback review-reject();
     callback alert-retry();
     callback alert-cancel();
     callback alert-close();
->>>>>>> Stashed changes
+    callback review-primary-action();
+    callback review-secondary-action();
+    callback review-modal-closed();
+    callback review-approve();
+    callback review-edit();
+    callback review-reject();
 
     // ── Global ESC key handler (modal compat) ────────────────────────────────
     forward-focus: ks;

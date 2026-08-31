@@ -333,6 +333,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
     // 1-second dynamic hardware telemetry refresh
     let telemetry_ui = ui.as_weak();
+    let mut cpu_tracker = CpuTracker::new();
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(1000), move || {
         if let Some(ui) = telemetry_ui.upgrade() {
@@ -341,14 +342,24 @@ fn main() -> Result<(), slint::PlatformError> {
             ui.set_live_time(time.into());
 
             // Real CPU sample
-            if let Some(cpu_pct) = sample_cpu_load_percent() {
-                let cpu_val = (cpu_pct as f32 / 100.0).clamp(0.0, 1.0);
-                ui.set_cpu_usage(cpu_val);
-                ui.set_cpu_display(format!("{}%", cpu_pct).into());
+            let cpu_val = cpu_tracker.sample();
+            let cpu_pct = (cpu_val * 100.0).round() as u32;
+            ui.set_cpu_usage(cpu_val);
+            ui.set_cpu_display(format!("{}%", cpu_pct).into());
 
-                // Real System Load
-                ui.set_system_load(cpu_val);
-            }
+            // Real System Load
+            ui.set_system_load(cpu_val);
+            ui.set_system_load_display(format!("{}%", cpu_pct).into());
+
+            // Real RAM sample
+            let (ram_val, ram_str, _) = get_ram_info();
+            ui.set_ram_usage(ram_val);
+            ui.set_ram_display(ram_str.into());
+
+            // Real Disk sample
+            let (disk_val, disk_str) = get_disk_info();
+            ui.set_disk_usage(disk_val);
+            ui.set_disk_display(disk_str.into());
         }
     });
 
