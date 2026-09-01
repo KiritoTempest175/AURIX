@@ -1,14 +1,12 @@
 [package]
 name = "core_engine"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-authors = ["Huzaifa"]
-description = "Core Rust Engine for AURIX Desktop Agent"
+authors = ["LUNA Engineering Team"]
+description = "Core Rust Engine & Adaptive Power Governor for LUNA Desktop Agent"
 
 [lib]
 name = "core_engine"
-# "cdylib" is required to produce a shared library for Python to import
-# "rlib" is required for Rust integration tests
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
@@ -19,8 +17,17 @@ pyo3 = { version = "0.20.0", features = ["extension-module", "abi3-py310"] }
 sysinfo = "0.30.5"
 nvml-wrapper = "0.9.0"
 
-# Windows Accessibility & Hooking
+# Windows Accessibility, Input & Hooking
 uiautomation = "0.3.0"
+windows-sys = { version = "0.52.0", features = [
+    "Win32_Foundation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Console",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Security"
+] }
 windows = { version = "0.52.0", features = ["Win32_System_Console", "Win32_Foundation"] }
 
 # Cross-thread primitives and memory safety
@@ -28,3 +35,4 @@ parking_lot = "0.12.1"
 once_cell = "1.19.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tracing = "0.1.40"

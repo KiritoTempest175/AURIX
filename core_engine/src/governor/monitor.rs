@@ -1,23 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // core_engine/src/governor/monitor.rs
 // ─────────────────────────────────────────────────────────────────────────────
-// Hardware Resource Governor — background polling loop.
+// Hardware Resource Governor v2 — Adaptive idle-aware polling loop.
 //
-// This module spawns a dedicated OS thread that polls host RAM via `sysinfo`
-// and GPU VRAM via `nvml-wrapper` at a configurable interval (default 1000ms).
-// When either metric exceeds the blueprint-mandated hard ceilings, it writes
-// `true` to the global `AtomicBool` suspend flag so the Python QLoRA loop
-// yields the GPU within one micro-batch iteration.
-//
-// Design rationale:
-// - `std::thread::spawn` instead of `tokio` because the monitor is a simple
-//   sleep-poll loop with no async I/O. Adding a full async runtime would
-//   increase RSS by ~2MB for zero benefit.
-// - The thread is detached (the `JoinHandle` is intentionally dropped) so it
-//   lives for the entire process lifetime. This is safe because it only reads
-//   hardware counters and writes to an atomic flag.
-// - `sysinfo::System` is NOT `Send` on some platforms, so we construct it
-//   *inside* the spawned thread rather than moving it in.
+// Continuously monitors host RAM (sysinfo), GPU VRAM (NVML), GPU temperature,
+// and user idle time / screen lock status (IdleMonitor).
+// Dynamically transitions PowerState between Active, Idle, Locked, and Suspending.
 // ─────────────────────────────────────────────────────────────────────────────
 
 use pyo3::prelude::*;
@@ -25,117 +13,110 @@ use std::thread;
 use std::time::Duration;
 use sysinfo::System;
 use nvml_wrapper::Nvml;
-use crate::governor::atomic_state::set_suspend_flag;
 
-// ─── Blueprint v2.0 Hard Ceilings ───────────────────────────────────────────
-// These constants are the absolute safety boundaries. If either is exceeded
-// the governor MUST suspend the AI workload immediately.
-//
-// RAM: 12 GB out of 16 GB host (75% utilisation ceiling)
-// VRAM: 6 GB out of 8 GB device (75% utilisation ceiling)
-// ─────────────────────────────────────────────────────────────────────────────
+use crate::governor::atomic_state::{set_power_state, set_suspend_flag, PowerState};
+use crate::governor::idle_monitor::create_idle_monitor;
 
-/// Maximum allowed system RAM usage in bytes (12 GiB).
-const MAX_RAM_BYTES: u64 = 12 * 1024 * 1024 * 1024;
+// ─── Hardware Ceilings (Configurable defaults) ──────────────────────────────
+const ACTIVE_MAX_RAM_BYTES: u64 = 12 * 1024 * 1024 * 1024;  // 12.0 GiB Active
+const IDLE_MAX_RAM_BYTES: u64 = 135 * 1024 * 1024 * 102;   // 13.5 GiB Idle
+const ABSOLUTE_MAX_RAM_BYTES: u64 = 14 * 1024 * 1024 * 1024;// 14.0 GiB Absolute
 
-/// Maximum allowed GPU VRAM usage in bytes (6 GiB).
-const MAX_VRAM_BYTES: u64 = 6 * 1024 * 1024 * 1024;
+const ACTIVE_MAX_VRAM_BYTES: u64 = 6 * 1024 * 1024 * 1024;  // 6.0 GiB Active
+const IDLE_MAX_VRAM_BYTES: u64 = 7 * 1024 * 1024 * 1024;    // 7.0 GiB Idle
+const ABSOLUTE_MAX_VRAM_BYTES: u64 = 7372800000;            // ~7.03 GiB Absolute (7.2GB ceiling)
 
-/// Polling interval in milliseconds. Blueprint specifies 1000ms.
-/// Shorter intervals increase CPU overhead; longer intervals risk
-/// overshooting the ceiling before the governor reacts.
-const POLL_INTERVAL_MS: u64 = 1000;
-
-/// GPU device index to monitor. Index 0 is the primary discrete GPU.
+const GPU_THERMAL_LIMIT_CELSIUS: u32 = 82;                  // GPU core temp ceiling
+const IDLE_THRESHOLD_SECONDS: u64 = 300;                    // 5 minutes
+const POLL_INTERVAL_MS: u64 = 1000;                         // 1000ms cadence
 const GPU_DEVICE_INDEX: u32 = 0;
 
-// ─── Resource Snapshot ──────────────────────────────────────────────────────
-// A plain data struct capturing one point-in-time reading.
-// Not exported to Python — this is an internal diagnostic tool.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// A snapshot of current hardware resource usage at a single point in time.
-/// Used internally for structured logging and threshold comparison.
+/// Snapshot of system hardware state.
 #[derive(Debug, Clone, Copy)]
 pub struct ResourceSnapshot {
-    /// System RAM currently in use, in bytes.
     pub used_ram_bytes: u64,
-    /// Total system RAM available, in bytes.
     pub total_ram_bytes: u64,
-    /// GPU VRAM currently in use, in bytes.  `None` if no NVIDIA GPU detected.
     pub used_vram_bytes: Option<u64>,
-    /// Total GPU VRAM, in bytes.  `None` if no NVIDIA GPU detected.
     pub total_vram_bytes: Option<u64>,
-    /// Whether the governor has decided to suspend the workload.
+    pub gpu_temperature_c: Option<u32>,
+    pub idle_seconds: u64,
+    pub is_screen_locked: bool,
+    pub power_state: PowerState,
     pub suspend_triggered: bool,
 }
 
-// ─── Legacy PyFunction Export ───────────────────────────────────────────────
-
-/// Starts the background hardware governor thread.
-///
-/// This is the primary entry point called from Python at agent boot:
-/// ```python
-/// import aurix_core
-/// aurix_core.start_hardware_monitor()
-/// ```
-///
-/// The thread runs for the lifetime of the process. If the monitor is called
-/// multiple times, each call spawns an additional thread (idempotency guard
-/// is recommended at the Python layer).
+/// Starts the adaptive background hardware governor thread.
 #[pyfunction]
 pub fn start_hardware_monitor() {
     thread::spawn(move || {
-        // ── Initialise sysinfo inside the thread ─────────────────────────
-        // `System::new_all()` performs a full initial scan of all subsystems.
-        // We only need memory, but the initial scan is negligible (~1ms).
         let mut sys = System::new_all();
-
-        // ── Initialise NVML (NVIDIA Management Library) ──────────────────
-        // This can fail on systems without an NVIDIA GPU, in CI runners,
-        // or if the NVIDIA driver is not installed.  We degrade gracefully
-        // to RAM-only monitoring rather than crashing.
         let nvml_opt = Nvml::init().ok();
+        let idle_monitor = create_idle_monitor();
 
         if nvml_opt.is_none() {
-            eprintln!(
-                "[AURIX Governor] WARNING: NVML initialisation failed. \
-                 GPU VRAM monitoring is DISABLED. Only RAM will be governed."
-            );
+            eprintln!("[LUNA Governor] INFO: NVML not detected. Running RAM-only power governor.");
         }
 
-        // ── Main polling loop ────────────────────────────────────────────
         loop {
-            // Refresh only the memory subsystem (cheaper than refresh_all).
             sys.refresh_memory();
             let used_ram = sys.used_memory();
 
-            // Start with the assumption that no suspension is needed.
+            let idle_sec = idle_monitor.get_idle_seconds();
+            let screen_locked = idle_monitor.is_screen_locked();
+
+            // 1. Determine Target Power State based on user activity
+            let current_power_state = if screen_locked {
+                PowerState::Locked
+            } else if idle_sec >= IDLE_THRESHOLD_SECONDS {
+                PowerState::Idle
+            } else {
+                PowerState::Active
+            };
+
+            set_power_state(current_power_state);
+
+            // 2. Select dynamic RAM / VRAM thresholds based on current power state
+            let (max_ram, max_vram) = match current_power_state {
+                PowerState::Active => (ACTIVE_MAX_RAM_BYTES, ACTIVE_MAX_VRAM_BYTES),
+                PowerState::Idle | PowerState::Locked => (IDLE_MAX_RAM_BYTES, IDLE_MAX_VRAM_BYTES),
+                PowerState::Suspending => (0, 0),
+            };
+
             let mut should_suspend = false;
 
-            // ── RAM check ────────────────────────────────────────────────
-            // sysinfo returns memory in bytes on Windows.
-            if used_ram >= MAX_RAM_BYTES {
+            // 3. RAM Limit Verification
+            if used_ram >= max_ram || used_ram >= ABSOLUTE_MAX_RAM_BYTES {
                 eprintln!(
-                    "[AURIX Governor] RAM CEILING BREACHED: {:.2} GB / {:.2} GB limit",
+                    "[LUNA Governor] RAM CEILING BREACH ({:?}): {:.2} GB / {:.2} GB limit",
+                    current_power_state,
                     used_ram as f64 / (1024.0 * 1024.0 * 1024.0),
-                    MAX_RAM_BYTES as f64 / (1024.0 * 1024.0 * 1024.0),
+                    max_ram as f64 / (1024.0 * 1024.0 * 1024.0),
                 );
                 should_suspend = true;
             }
 
-            // ── VRAM check ───────────────────────────────────────────────
-            // We query device 0 (the primary discrete GPU). If the system
-            // has multiple GPUs, the blueprint only governs the one running
-            // the QLoRA workload.
+            // 4. VRAM & Thermal Verification
             if let Some(ref nvml) = nvml_opt {
                 if let Ok(device) = nvml.device_by_index(GPU_DEVICE_INDEX) {
+                    // Check VRAM
                     if let Ok(mem_info) = device.memory_info() {
-                        if mem_info.used >= MAX_VRAM_BYTES {
+                        if mem_info.used >= max_vram || mem_info.used >= ABSOLUTE_MAX_VRAM_BYTES {
                             eprintln!(
-                                "[AURIX Governor] VRAM CEILING BREACHED: {:.2} GB / {:.2} GB limit",
+                                "[LUNA Governor] VRAM CEILING BREACH ({:?}): {:.2} GB / {:.2} GB limit",
+                                current_power_state,
                                 mem_info.used as f64 / (1024.0 * 1024.0 * 1024.0),
-                                MAX_VRAM_BYTES as f64 / (1024.0 * 1024.0 * 1024.0),
+                                max_vram as f64 / (1024.0 * 1024.0 * 1024.0),
+                            );
+                            should_suspend = true;
+                        }
+                    }
+
+                    // Check Thermal Throttle
+                    if let Ok(temp) = device.temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu) {
+                        if temp >= GPU_THERMAL_LIMIT_CELSIUS {
+                            eprintln!(
+                                "[LUNA Governor] GPU THERMAL THROTTLE TRIGGERED: {} C >= {} C ceiling",
+                                temp, GPU_THERMAL_LIMIT_CELSIUS
                             );
                             should_suspend = true;
                         }
@@ -143,53 +124,68 @@ pub fn start_hardware_monitor() {
                 }
             }
 
-            // ── Update the atomic suspend flag ───────────────────────────
-            // This write is immediately visible to the Python QLoRA loop
-            // polling `check_suspend_flag()` on any thread.
+            // 5. Update global atomic suspend flag
             set_suspend_flag(should_suspend);
 
-            // ── Sleep until next poll ────────────────────────────────────
             thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
         }
     });
 }
 
-// ─── Diagnostic Function (Rust-only, not exported to Python) ────────────────
-
-/// Take a single-shot resource snapshot without side effects.
-///
-/// This is useful for integration tests and diagnostics. It does NOT
-/// modify the suspend flag.
+/// Single-shot diagnostic snapshot.
 pub fn snapshot_resources() -> ResourceSnapshot {
     let mut sys = System::new_all();
     sys.refresh_memory();
+    let idle_monitor = create_idle_monitor();
 
     let used_ram = sys.used_memory();
     let total_ram = sys.total_memory();
+    let idle_sec = idle_monitor.get_idle_seconds();
+    let screen_locked = idle_monitor.is_screen_locked();
 
-    let (used_vram, total_vram) = match Nvml::init() {
+    let (used_vram, total_vram, gpu_temp) = match Nvml::init() {
         Ok(nvml) => {
             if let Ok(device) = nvml.device_by_index(GPU_DEVICE_INDEX) {
-                if let Ok(mem) = device.memory_info() {
-                    (Some(mem.used), Some(mem.total))
-                } else {
-                    (None, None)
-                }
+                let mem = device.memory_info().ok();
+                let temp = device.temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu).ok();
+                (mem.as_ref().map(|m| m.used), mem.as_ref().map(|m| m.total), temp)
             } else {
-                (None, None)
+                (None, None, None)
             }
         }
-        Err(_) => (None, None),
+        Err(_) => (None, None, None),
     };
 
-    let suspend_triggered = used_ram >= MAX_RAM_BYTES
-        || used_vram.map_or(false, |v| v >= MAX_VRAM_BYTES);
+    let power_state = if screen_locked {
+        PowerState::Locked
+    } else if idle_sec >= IDLE_THRESHOLD_SECONDS {
+        PowerState::Idle
+    } else {
+        PowerState::Active
+    };
+
+    let max_ram = match power_state {
+        PowerState::Active => ACTIVE_MAX_RAM_BYTES,
+        _ => IDLE_MAX_RAM_BYTES,
+    };
+    let max_vram = match power_state {
+        PowerState::Active => ACTIVE_MAX_VRAM_BYTES,
+        _ => IDLE_MAX_VRAM_BYTES,
+    };
+
+    let suspend_triggered = used_ram >= max_ram
+        || used_vram.map_or(false, |v| v >= max_vram)
+        || gpu_temp.map_or(false, |t| t >= GPU_THERMAL_LIMIT_CELSIUS);
 
     ResourceSnapshot {
         used_ram_bytes: used_ram,
         total_ram_bytes: total_ram,
         used_vram_bytes: used_vram,
         total_vram_bytes: total_vram,
+        gpu_temperature_c: gpu_temp,
+        idle_seconds: idle_sec,
+        is_screen_locked: screen_locked,
+        power_state,
         suspend_triggered,
     }
 }

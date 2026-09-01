@@ -1,0 +1,118 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LunaConfigSchema",
+  "description": "Validation schema for LUNA desktop assistant configuration (luna.toml)",
+  "type": "object",
+  "required": ["system", "security", "resources", "power_governor", "audio", "llm", "training"],
+  "properties": {
+    "system": {
+      "type": "object",
+      "required": ["app_name", "version", "environment", "log_level"],
+      "properties": {
+        "app_name": { "type": "string" },
+        "version": { "type": "string" },
+        "environment": { "type": "string", "enum": ["development", "staging", "production"] },
+        "log_level": { "type": "string", "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] },
+        "log_dir": { "type": "string" },
+        "data_dir": { "type": "string" }
+      }
+    },
+    "security": {
+      "type": "object",
+      "required": ["allowed_project_paths", "file_jail_enabled", "trust_token_required"],
+      "properties": {
+        "allowed_project_paths": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "file_jail_enabled": { "type": "boolean" },
+        "read_only_mode": { "type": "boolean" },
+        "trust_token_required": { "type": "boolean" },
+        "secret_scrubbing_enabled": { "type": "boolean" },
+        "encrypt_checkpoints_at_rest": { "type": "boolean" },
+        "append_only_audit_log": { "type": "boolean" }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "required": ["max_ram_gb", "max_vram_gb", "poll_interval_ms"],
+      "properties": {
+        "max_ram_gb": { "type": "number", "minimum": 2.0 },
+        "max_vram_gb": { "type": "number", "minimum": 1.0 },
+        "absolute_max_ram_gb": { "type": "number" },
+        "absolute_max_vram_gb": { "type": "number" },
+        "cpu_throttle_percent": { "type": "number", "minimum": 10.0, "maximum": 100.0 },
+        "poll_interval_ms": { "type": "integer", "minimum": 100 },
+        "suspend_on_overload": { "type": "boolean" },
+        "thermal_throttle_celsius": { "type": "number" }
+      }
+    },
+    "power_governor": {
+      "type": "object",
+      "required": ["idle_threshold_seconds", "active_max_vram_gb", "idle_max_vram_gb"],
+      "properties": {
+        "idle_threshold_seconds": { "type": "integer", "minimum": 10 },
+        "active_max_vram_gb": { "type": "number" },
+        "idle_max_vram_gb": { "type": "number" },
+        "active_max_ram_gb": { "type": "number" },
+        "idle_max_ram_gb": { "type": "number" },
+        "active_lora_rank": { "type": "integer" },
+        "idle_lora_rank": { "type": "integer" },
+        "auto_hibernate_on_shutdown": { "type": "boolean" }
+      }
+    },
+    "audio": {
+      "type": "object",
+      "required": ["microphone", "auto_tts_reply"],
+      "properties": {
+        "microphone": { "type": "string" },
+        "whisper_model_path": { "type": "string" },
+        "whisper_threads": { "type": "integer" },
+        "piper_model_path": { "type": "string" },
+        "piper_config_path": { "type": "string" },
+        "auto_tts_reply": { "type": "boolean" },
+        "wakeword": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "keyword": { "type": "string" },
+            "sensitivity": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+            "confirmation_echo": { "type": "string" },
+            "audio_sample_rate": { "type": "integer" },
+            "chunk_size": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "llm": {
+      "type": "object",
+      "required": ["model_name", "effective_params", "quantization", "device"],
+      "properties": {
+        "model_name": { "type": "string" },
+        "effective_params": { "type": "string", "enum": ["E2B", "E4B"] },
+        "load_in_4bit": { "type": "boolean" },
+        "quantization": { "type": "string", "enum": ["nf4", "fp4", "int8"] },
+        "device": { "type": "string" },
+        "max_seq_length": { "type": "integer" },
+        "temperature": { "type": "number" },
+        "top_p": { "type": "number" },
+        "fallback_mode": { "type": "boolean" }
+      }
+    },
+    "training": {
+      "type": "object",
+      "required": ["student_base_model", "checkpoint_dir", "auto_start_training_on_boot"],
+      "properties": {
+        "student_base_model": { "type": "string" },
+        "checkpoint_dir": { "type": "string" },
+        "auto_start_training_on_boot": { "type": "boolean" },
+        "max_retained_checkpoints": { "type": "integer", "minimum": 1 },
+        "experience_replay_ratio": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+        "eval_frequency_steps": { "type": "integer" },
+        "dataset_version": { "type": "string" },
+        "base": { "type": "object" },
+        "adaptive": { "type": "object" }
+      }
+    }
+  }
+}

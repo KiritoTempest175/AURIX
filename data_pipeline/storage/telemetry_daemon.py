@@ -1,78 +1,126 @@
+"""LUNA Live Telemetry Ingestion Daemon.
+
+Processes real-time hardware metrics, power-state transitions, and execution logs
+from the Rust core into SQLite schema, ensuring secrets are scrubbed before persistence.
+"""
+
+from __future__ import annotations
+
+import logging
 import os
-import sqlite3
 import queue
+import sqlite3
 import threading
-from typing import Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+from security.secret_scrubber import SecretScrubber, get_default_scrubber
+
+logger = logging.getLogger("luna.data_pipeline.telemetry_daemon")
+
 
 class TelemetryIngestionDaemon:
-    """
-    Live ingestion daemon that processes real-time hardware metrics and 
-    execution logs from the Rust core into the relational SQLite schema.
-    """
-    def __init__(self, db_path: str = "./databases/telemetry/aurix_session.db"):
+    """Live ingestion daemon that processes hardware metrics and scrubbed execution logs."""
+
+    def __init__(
+        self,
+        db_path: str = "./databases/telemetry/luna_session.db",
+        scrubber: Optional[SecretScrubber] = None,
+    ) -> None:
         self.db_path = db_path
-        self.event_queue: queue.Queue = queue.Queue()
+        self.scrubber = scrubber or get_default_scrubber()
+        self.event_queue: queue.Queue[Dict[str, Any]] = queue.Queue()
         self._listening = False
 
         # Ensure db directory exists
         os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
         self._init_schema()
 
-    def _init_schema(self):
-        schema = """
-        CREATE TABLE IF NOT EXISTS execution_logs (
-            log_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            action_type TEXT NOT NULL,
-            target_command TEXT NOT NULL,
-            status TEXT NOT NULL,
-            return_code INTEGER,
-            error_traceback TEXT
-        );
-        CREATE TABLE IF NOT EXISTS performance_telemetry (
-            log_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            ram_allocated_gb REAL NOT NULL,
-            vram_peak_gb REAL NOT NULL,
-            training_state TEXT NOT NULL
-        );
-        """
+    def _init_schema(self) -> None:
+        schema_file = Path(__file__).parent / "schema.sql"
+        if schema_file.exists():
+            schema = schema_file.read_text(encoding="utf-8")
+        else:
+            schema = """
+            CREATE TABLE IF NOT EXISTS execution_logs (
+                log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                action_type TEXT NOT NULL,
+                target_command TEXT NOT NULL,
+                status TEXT NOT NULL,
+                return_code INTEGER,
+                error_traceback TEXT,
+                dataset_version_hash TEXT
+            );
+            CREATE TABLE IF NOT EXISTS performance_telemetry (
+                log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                ram_allocated_gb REAL NOT NULL,
+                vram_peak_gb REAL NOT NULL,
+                power_state TEXT NOT NULL DEFAULT 'ACTIVE',
+                training_state TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS security_audit_trails (
+                audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                requested_path TEXT NOT NULL,
+                operation_type TEXT NOT NULL,
+                trust_token_id TEXT,
+                approval_status TEXT NOT NULL,
+                sandbox_enforced BOOLEAN NOT NULL DEFAULT 1
+            );
+            """
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(schema)
             conn.commit()
 
-    def ingest_hardware_metrics(self, ram_gb: float, vram_gb: float, training_state: str):
-        """
-        Streams real-time RAM/VRAM polling data from Rust's sysinfo/nvml wrappers.
-        """
+    def ingest_hardware_metrics(
+        self,
+        ram_gb: float,
+        vram_gb: float,
+        training_state: str,
+        power_state: str = "ACTIVE",
+    ) -> None:
+        """Stream real-time RAM/VRAM and PowerState telemetry."""
         query = """
-            INSERT INTO performance_telemetry (ram_allocated_gb, vram_peak_gb, training_state)
-            VALUES (?, ?, ?)
+            INSERT INTO performance_telemetry (ram_allocated_gb, vram_peak_gb, power_state, training_state)
+            VALUES (?, ?, ?, ?)
         """
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(query, (ram_gb, vram_gb, training_state))
-            conn.commit()
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(query, (ram_gb, vram_gb, power_state, training_state))
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to ingest hardware metrics: {e}")
 
     def ingest_execution_log(
-        self, 
-        session_id: str, 
-        action_type: str, 
-        target_command: str, 
-        status: str, 
-        return_code: int, 
-        error_traceback: Optional[str] = None
-    ):
-        """
-        Logs every terminal command or UI action intercepted by the Rust sandbox.
-        """
+        self,
+        session_id: str,
+        action_type: str,
+        target_command: str,
+        status: str,
+        return_code: int,
+        error_traceback: Optional[str] = None,
+        dataset_version_hash: Optional[str] = None,
+    ) -> None:
+        """Log execution events with credential redaction applied."""
+        scrubbed_cmd = self.scrubber.scrub_text(target_command)
+        scrubbed_traceback = self.scrubber.scrub_text(error_traceback) if error_traceback else None
+
         query = """
-            INSERT INTO execution_logs (session_id, action_type, target_command, status, return_code, error_traceback)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO execution_logs (session_id, action_type, target_command, status, return_code, error_traceback, dataset_version_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(query, (session_id, action_type, target_command, status, return_code, error_traceback))
-            conn.commit()
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    query,
+                    (session_id, action_type, scrubbed_cmd, status, return_code, scrubbed_traceback, dataset_version_hash),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to ingest execution log: {e}")
 
     def consume_terminal_event(
         self,
@@ -80,12 +128,9 @@ class TelemetryIngestionDaemon:
         stdout: str,
         stderr: str,
         exit_code: int,
-        session_id: str = "active_desktop_session"
-    ):
-        """
-        Continuously consumes stdout events captured from terminal_hook.rs
-        during active desktop sessions and persists them to the telemetry database.
-        """
+        session_id: str = "active_desktop_session",
+    ) -> None:
+        """Consume stdout/stderr events from PTY execution, scrub secrets, and persist."""
         status = "SUCCESS" if exit_code == 0 else "FAILED"
         traceback = stderr if stderr.strip() else (stdout if exit_code != 0 else None)
         self.ingest_execution_log(
@@ -94,13 +139,11 @@ class TelemetryIngestionDaemon:
             target_command=command,
             status=status,
             return_code=exit_code,
-            error_traceback=traceback
+            error_traceback=traceback,
         )
 
-    def start_stdout_listener_hook(self):
-        """
-        Starts a background daemon thread that continuously consumes queued terminal events.
-        """
+    def start_stdout_listener_hook(self) -> None:
+        """Start background queue consumer thread."""
         if self._listening:
             return
         self._listening = True
@@ -114,16 +157,20 @@ class TelemetryIngestionDaemon:
                         stdout=event.get("stdout", ""),
                         stderr=event.get("stderr", ""),
                         exit_code=event.get("exit_code", 0),
-                        session_id=event.get("session_id", "active_desktop_session")
+                        session_id=event.get("session_id", "active_desktop_session"),
                     )
                 except queue.Empty:
                     continue
 
-        threading.Thread(target=listener_loop, daemon=True).start()
+        threading.Thread(target=listener_loop, daemon=True, name="TelemetryListener").start()
 
-# --- Local Verification ---
-if __name__ == "__main__":
-    daemon = TelemetryIngestionDaemon()
-    daemon.start_stdout_listener_hook()
-    daemon.consume_terminal_event("echo Hello from terminal_hook.rs", stdout="Hello from terminal_hook.rs\n", stderr="", exit_code=0)
-    print("[OK] Successfully wired telemetry daemon stdout hook.")
+
+_GLOBAL_TELEMETRY_DAEMON: Optional[TelemetryIngestionDaemon] = None
+
+
+def get_default_telemetry_daemon() -> TelemetryIngestionDaemon:
+    """Return default singleton TelemetryIngestionDaemon."""
+    global _GLOBAL_TELEMETRY_DAEMON
+    if _GLOBAL_TELEMETRY_DAEMON is None:
+        _GLOBAL_TELEMETRY_DAEMON = TelemetryIngestionDaemon()
+    return _GLOBAL_TELEMETRY_DAEMON

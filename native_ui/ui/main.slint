@@ -1,12 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-//  A.U.R.I.X  —  Clean Modular AI Dashboard
-//  Modular Architecture:
-//    - Top Navigation & System Status Header
-//    - Top Hardware Metric Cards Grid (CPU, Memory, Storage, Thermals)
-//    - Voice Control & AI Core Module
-//    - AI Chat & Command Log Console Module
+//  LUNA  —  General Autonomous Desktop Executive Dashboard (Slint 1.8)
 // ═══════════════════════════════════════════════════════════════════════════
-import { LineEdit, ScrollView } from "std-widgets.slint";
+import { LineEdit, ScrollView, Button } from "std-widgets.slint";
 import { ReviewCard, ActionParam } from "components/review_card.slint";
 import { AlertModal } from "components/alert_modal.slint";
 
@@ -18,12 +13,19 @@ export struct ChatMessage {
     time:   string,
 }
 
+export struct CheckpointEntry {
+    checkpoint_id: string,
+    iso_time: string,
+    step_count: int,
+    eval_loss: string,
+    lora_rank: int,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-//  COMPONENT: ModularCard  — clean rounded card container
+//  COMPONENT: ModularCard  — rounded glassmorphism container
 // ─────────────────────────────────────────────────────────────────────────────
 component ModularCard inherits Rectangle {
     in property <string> title: "";
-    in property <string> icon: "";
     in property <color>  card-bg: #0f172ae8;
     in property <color>  card-border: #1e293bcc;
 
@@ -39,7 +41,7 @@ component ModularCard inherits Rectangle {
 // ─────────────────────────────────────────────────────────────────────────────
 component CleanMeter inherits Rectangle {
     in property <float> value: 0.0;
-    in property <color> bar-color: #00d2ff;
+    in property <color> bar-color: #38bdf8;
     height: 6px;
     border-radius: 3px;
     background: #080f1d;
@@ -63,7 +65,7 @@ component MetricTile inherits ModularCard {
     in property <string> main-value: "";
     in property <string> sub-value: "";
     in property <float>  amount: 0.0;
-    in property <color>  accent-color: #00d2ff;
+    in property <color>  accent-color: #38bdf8;
     in property <string> tile-icon: "";
 
     height: 105px;
@@ -120,152 +122,83 @@ component MetricTile inherits ModularCard {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  COMPONENT: ControlToggle  — clean media hardware toggle
-// ─────────────────────────────────────────────────────────────────────────────
-component ControlToggle inherits Rectangle {
-    in property <string> icon;
-    in property <string> label: "";
-    in property <bool>   active: false;
-    callback clicked();
-
-    height: 36px;
-    min-width: 80px;
-    border-radius: 6px;
-    border-width: 1px;
-    border-color: root.active ? #00d2ff88 : #334155;
-    background: root.active ? #00d2ff18 : #1e293b66;
-    animate background { duration: 150ms; }
-    animate border-color { duration: 150ms; }
-
-    HorizontalLayout {
-        alignment: center;
-        spacing: 6px;
-        padding-left: 10px; padding-right: 10px;
-
-        Text {
-            text: root.icon;
-            color: root.active ? #00d2ff : #64748b;
-            font-size: 12px;
-            vertical-alignment: center;
-        }
-        if root.label != "" : Text {
-            text: root.label;
-            color: root.active ? #f1f5f9 : #64748b;
-            font-size: 9.5px;
-            font-weight: 700;
-            letter-spacing: 0.5px;
-            vertical-alignment: center;
-        }
-    }
-    TouchArea { clicked => { root.clicked(); } }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 //  COMPONENT: VoiceOrb  — animated concentric AI core visualizer
 // ─────────────────────────────────────────────────────────────────────────────
 component VoiceOrb inherits Rectangle {
     in property <float> anim-phase: 0.0;
     in property <bool>  active: true;
 
-    width: 250px; height: 250px;
+    width: 220px; height: 220px;
     background: #00000000;
 
-    // Outer radial glow aura
     Rectangle {
-        x: 0; y: 0; width: 250px; height: 250px;
-        border-radius: 125px;
-        background: @radial-gradient(circle, #00d2ff20 0%, #0284c70a 45%, #00000000 70%);
+        x: 0; y: 0; width: 220px; height: 220px;
+        border-radius: 110px;
+        background: @radial-gradient(circle, #38bdf820 0%, #0284c70a 45%, #00000000 70%);
         opacity: root.active ? (0.6 + 0.4 * Math.sin(root.anim-phase * 1.0rad)) : 0.2;
         animate opacity { duration: 200ms; }
     }
 
-    // Outer concentric ring
     Rectangle {
-        x: 6px; y: 6px; width: 238px; height: 238px;
-        border-radius: 119px;
-        border-width: 1px; border-color: #00d2ff22;
+        x: 6px; y: 6px; width: 208px; height: 208px;
+        border-radius: 104px;
+        border-width: 1px; border-color: #38bdf822;
         background: #00000000;
     }
 
-    // Secondary pulse ring
     Rectangle {
-        x: 26px; y: 26px; width: 198px; height: 198px;
-        border-radius: 99px;
+        x: 24px; y: 24px; width: 172px; height: 172px;
+        border-radius: 86px;
         border-width: 1.5px;
-        border-color: root.active ? #00d2ff55 : #1e293b66;
-        background: @radial-gradient(circle, #00d2ff10 0%, #00000000 60%);
+        border-color: root.active ? #38bdf855 : #1e293b66;
+        background: @radial-gradient(circle, #38bdf810 0%, #00000000 60%);
         animate border-color { duration: 300ms; }
     }
 
-    // Inner core sphere
     Rectangle {
-        x: 65px; y: 65px; width: 120px; height: 120px;
-        border-radius: 60px;
+        x: 55px; y: 55px; width: 110px; height: 110px;
+        border-radius: 55px;
         border-width: 2px;
-        border-color: root.active ? #00d2ffaa : #0284c744;
+        border-color: root.active ? #38bdf8aa : #0284c744;
         background: @radial-gradient(circle, #0f172a, #030712);
         animate border-color { duration: 300ms; }
     }
 
-    // Cardinal tick indicators
-    Rectangle { x: 122px; y: 4px; width: 6px; height: 6px; border-radius: 3px; background: #00d2ff;
-        opacity: 0.5 + 0.5 * Math.sin(root.anim-phase * 1.0rad); }
-    Rectangle { x: 240px; y: 122px; width: 6px; height: 6px; border-radius: 3px; background: #00d2ff;
-        opacity: 0.5 + 0.5 * Math.sin(root.anim-phase * 1.0rad + 1.57rad); }
-    Rectangle { x: 122px; y: 240px; width: 6px; height: 6px; border-radius: 3px; background: #00d2ff;
-        opacity: 0.5 + 0.5 * Math.sin(root.anim-phase * 1.0rad + 3.14rad); }
-    Rectangle { x: 4px; y: 122px; width: 6px; height: 6px; border-radius: 3px; background: #00d2ff;
-        opacity: 0.5 + 0.5 * Math.sin(root.anim-phase * 1.0rad + 4.71rad); }
-
-    // 9-Bar Spectrum Waveform in core
+    // Spectrum bars inside core
     HorizontalLayout {
-        x: 86px; y: 106px; width: 78px; height: 38px;
-        spacing: 4px; alignment: center;
+        x: 75px; y: 92px; width: 70px; height: 36px;
+        spacing: 3px; alignment: center;
 
         Rectangle { width: 3px; border-radius: 1.5px; background: #38bdf8aa;
             height: root.active ? (5px + 7px * Math.abs(Math.sin(root.anim-phase * 1.0rad + 0.0rad))) : 3px;
-            y: (38px - self.height) / 2; animate height { duration: 80ms; easing: ease-in-out; } }
+            y: (36px - self.height) / 2; animate height { duration: 80ms; } }
         Rectangle { width: 3px; border-radius: 1.5px; background: #38bdf8cc;
-            height: root.active ? (7px + 10px * Math.abs(Math.sin(root.anim-phase * 1.0rad + 0.6rad))) : 3px;
-            y: (38px - self.height) / 2; animate height { duration: 80ms; easing: ease-in-out; } }
-        Rectangle { width: 3px; border-radius: 1.5px; background: #38bdf8ee;
-            height: root.active ? (10px + 12px * Math.abs(Math.sin(root.anim-phase * 1.0rad + 1.2rad))) : 4px;
-            y: (38px - self.height) / 2; animate height { duration: 80ms; easing: ease-in-out; } }
-        Rectangle { width: 3px; border-radius: 1.5px; background: #00d2ff;
-            height: root.active ? (12px + 15px * Math.abs(Math.sin(root.anim-phase * 1.0rad + 1.8rad))) : 5px;
-            y: (38px - self.height) / 2; animate height { duration: 80ms; easing: ease-in-out; } }
-        // Center Peak Bar
+            height: root.active ? (8px + 11px * Math.abs(Math.sin(root.anim-phase * 1.0rad + 0.8rad))) : 3px;
+            y: (36px - self.height) / 2; animate height { duration: 80ms; } }
         Rectangle { width: 4px; border-radius: 2px; background: #ffffff;
-            height: root.active ? (16px + 20px * Math.abs(Math.sin(root.anim-phase * 1.0rad + 2.4rad))) : 6px;
-            y: (38px - self.height) / 2; animate height { duration: 80ms; easing: ease-in-out; } }
-        Rectangle { width: 3px; border-radius: 1.5px; background: #00d2ff;
-            height: root.active ? (12px + 15px * Math.abs(Math.sin(root.anim-phase * 1.0rad + 3.0rad))) : 5px;
-            y: (38px - self.height) / 2; animate height { duration: 80ms; easing: ease-in-out; } }
-        Rectangle { width: 3px; border-radius: 1.5px; background: #38bdf8ee;
-            height: root.active ? (10px + 12px * Math.abs(Math.sin(root.anim-phase * 1.0rad + 3.6rad))) : 4px;
-            y: (38px - self.height) / 2; animate height { duration: 80ms; easing: ease-in-out; } }
+            height: root.active ? (14px + 18px * Math.abs(Math.sin(root.anim-phase * 1.0rad + 1.6rad))) : 5px;
+            y: (36px - self.height) / 2; animate height { duration: 80ms; } }
         Rectangle { width: 3px; border-radius: 1.5px; background: #38bdf8cc;
-            height: root.active ? (7px + 10px * Math.abs(Math.sin(root.anim-phase * 1.0rad + 4.2rad))) : 3px;
-            y: (38px - self.height) / 2; animate height { duration: 80ms; easing: ease-in-out; } }
+            height: root.active ? (8px + 11px * Math.abs(Math.sin(root.anim-phase * 1.0rad + 2.4rad))) : 3px;
+            y: (36px - self.height) / 2; animate height { duration: 80ms; } }
         Rectangle { width: 3px; border-radius: 1.5px; background: #38bdf8aa;
-            height: root.active ? (5px + 7px * Math.abs(Math.sin(root.anim-phase * 1.0rad + 4.8rad))) : 3px;
-            y: (38px - self.height) / 2; animate height { duration: 80ms; easing: ease-in-out; } }
+            height: root.active ? (5px + 7px * Math.abs(Math.sin(root.anim-phase * 1.0rad + 3.2rad))) : 3px;
+            y: (36px - self.height) / 2; animate height { duration: 80ms; } }
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  MAIN APPLICATION DASHBOARD WINDOW
 // ═══════════════════════════════════════════════════════════════════════════
 export component AurixCommandCenter inherits Window {
-    title:           "A.U.R.I.X — Clean Modular AI Dashboard";
+    title:           "LUNA — JARVIS-Style Desktop Executive";
     preferred-width:  1380px;
     preferred-height: 840px;
     min-width:        960px;
     min-height:       620px;
     background:       #080c14;
 
-    // ── Properties bound from Rust ──────────────────────────────────────────
+    // ── Live Telemetry Properties ───────────────────────────────────────────
     in-out property <string> live-date:    "SAT, AUG 29, 2026";
     in-out property <string> live-time:    "10:02:01";
     in-out property <string> system-temp:  "38.4°C";
@@ -275,9 +208,11 @@ export component AurixCommandCenter inherits Window {
     in-out property <string> cpu-display:  "34%";
     in-out property <string> ram-display:  "9.2 / 16 GB";
     in-out property <float>  ram-usage:    0.57;
+    in-out property <string> vram-display: "3.4 / 8.0 GB";
+    in-out property <float>  vram-usage:   0.42;
+
     in-out property <string> disk-display: "41%";
     in-out property <float>  disk-usage:   0.41;
-
     in-out property <string> ram-vram-display: "16 / 12";
     in-out property <string> budget-display:   "GB";
     in-out property <string> offline-mode:     "ENABLED";
@@ -289,25 +224,29 @@ export component AurixCommandCenter inherits Window {
     in-out property <float>  system-load:           0.28;
     in-out property <string> system-load-display:  "28%";
 
-    in-out property <float>  anim-phase:       0.0;
     in-out property <bool>   camera-active:    false;
     in-out property <bool>   microphone-active: true;
     in-out property <bool>   keyboard-active:  false;
 
-    Timer {
-        interval: 33ms;
-        running: true;
-        triggered => {
-            root.anim-phase = root.anim-phase + 0.08;
-        }
-    }
+    // ── LUNA Power Governor & Student Training Properties ───────────────────
+    in-out property <string> power-state:       "ACTIVE";  // ACTIVE, IDLE, LOCKED, SUSPENDING
+    in-out property <bool>   training-running:  false;
+    in-out property <int>    training-step:     0;
+    in-out property <int>    training-rank:     16;
+    in-out property <string> training-loss:     "0.00";
+    in-out property <bool>   wakeword-active:   true;
 
-    in-out property <string> message-text:  "";
-    in-out property <string> toast-message: "";
-    in-out property <bool>   toast-visible: false;
+    in-out property <float>  anim-phase:        0.0;
+    in-out property <string> message-text:      "";
+    in-out property <string> toast-message:     "";
+    in-out property <bool>   toast-visible:     false;
     in-out property <[ChatMessage]> messages: [
-        { sender: "AURIX", text: "A.U.R.I.X modular dashboard initialized. All subsystems online and ready for your command.", time: "" }
+        { sender: "LUNA", text: "LUNA Executive initialized. Ready for voice or command instructions.", time: "" }
     ];
+
+    // ── Checkpoint Browser State ────────────────────────────────────────────
+    in-out property <bool> checkpoint-browser-visible: false;
+    in-out property <[CheckpointEntry]> checkpoints: [];
 
     // ── Modal-state properties ───────────────────────────────────────────────
     in-out property <bool>   alert-modal-open:     false;
@@ -338,8 +277,12 @@ export component AurixCommandCenter inherits Window {
 
     // ── Callbacks ────────────────────────────────────────────────────────────
     callback send-message(string);
+    callback toggle-training();
+    callback open-checkpoint-browser();
+    callback restore-checkpoint(string);
     callback clear-conversation();
     callback export-conversation();
+
     callback alert-primary-action();
     callback alert-secondary-action();
     callback alert-modal-closed();
@@ -354,27 +297,11 @@ export component AurixCommandCenter inherits Window {
     callback alert-cancel();
     callback alert-close();
 
-    // ── Global ESC key handler (modal compat) ────────────────────────────────
-    forward-focus: ks;
-    ks := FocusScope {
-        key-pressed(ev) => {
-            if (ev.text == Key.Escape) {
-                if (root.alert-modal-open)  { root.alert-modal-open  = false; root.alert-modal-closed();  return accept; }
-                if (root.review-modal-open) { root.review-modal-open = false; root.review-modal-closed(); return accept; }
-            }
-            reject
-        }
-    }
-
-    // ── Dark Slate Canvas Background & Subtle Grid ──
-    Rectangle {
-        width: 100%; height: 100%;
-        background: #080c14;
-        clip: true;
-
-        Rectangle {
-            width: 100%; height: 100%;
-            background: @radial-gradient(circle, #00d2ff0a 0%, #00000000 70%);
+    Timer {
+        interval: 33ms;
+        running: true;
+        triggered => {
+            root.anim-phase = root.anim-phase + 0.08;
         }
     }
 
@@ -382,16 +309,15 @@ export component AurixCommandCenter inherits Window {
         width: 100%; height: 100%; spacing: 0;
 
         // ════════════════════════════════════════════════════════════════════
-        //  1. TOP NAVIGATION / HEADER BAR
+        //  1. TOP NAVIGATION & STATUS HEADER
         // ════════════════════════════════════════════════════════════════════
         Rectangle {
             height: 56px;
             background: #0b1320f6;
-            border-width: 0px;
 
             Rectangle {
                 y: 55px; width: 100%; height: 1px;
-                background: @linear-gradient(90deg, #1e293b00 0%, #00d2ff55 50%, #1e293b00 100%);
+                background: @linear-gradient(90deg, #1e293b00 0%, #38bdf855 50%, #1e293b00 100%);
             }
 
             HorizontalLayout {
@@ -404,86 +330,106 @@ export component AurixCommandCenter inherits Window {
                     spacing: 12px; alignment: center;
                     Rectangle {
                         width: 34px; height: 34px; border-radius: 6px;
-                        border-width: 1px; border-color: #00d2ff55;
-                        background: #00d2ff14;
+                        border-width: 1px; border-color: #38bdf855;
+                        background: #38bdf814;
                         Text {
-                            text: "◎"; color: #00d2ff; font-size: 16px;
+                            text: "🌙"; font-size: 16px;
                             horizontal-alignment: center; vertical-alignment: center;
                         }
                     }
                     VerticalLayout {
                         spacing: 1px; alignment: center;
                         Text {
-                            text: "A.U.R.I.X"; color: #ffffff;
+                            text: "LUNA"; color: #ffffff;
                             font-size: 15px; font-weight: 800; letter-spacing: 2px;
                         }
                         Text {
-                            text: "CLEAN MODULAR AI DASHBOARD"; color: #00d2ff;
+                            text: "AUTONOMOUS EXECUTIVE"; color: #38bdf8;
                             font-size: 8px; font-weight: 700; letter-spacing: 1px;
                         }
                     }
 
-                    Rectangle { width: 8px; }
+                    Rectangle { width: 6px; }
 
-                    // Live Status Badge
+                    // Power State Badge
                     Rectangle {
-                        height: 22px; width: 78px; border-radius: 4px;
-                        border-width: 1px; border-color: #10b98155;
-                        background: #10b98118;
+                        height: 22px; width: 90px; border-radius: 4px;
+                        border-width: 1px;
+                        border-color: root.power-state == "ACTIVE" ? #38bdf855 : (root.power-state == "IDLE" ? #10b98155 : #f59e0b55);
+                        background: root.power-state == "ACTIVE" ? #38bdf818 : (root.power-state == "IDLE" ? #10b98118 : #f59e0b18);
                         HorizontalLayout {
                             alignment: center; spacing: 5px;
-                            Rectangle { width: 6px; height: 6px; border-radius: 3px; background: #10b981; y: (parent.height - self.height) / 2; }
-                            Text { text: "ONLINE"; color: #10b981; font-size: 9px; font-weight: 800; letter-spacing: 0.6px; vertical-alignment: center; }
+                            Rectangle {
+                                width: 6px; height: 6px; border-radius: 3px;
+                                background: root.power-state == "ACTIVE" ? #38bdf8 : (root.power-state == "IDLE" ? #10b981 : #f59e0b);
+                                y: (parent.height - self.height) / 2;
+                            }
+                            Text {
+                                text: root.power-state;
+                                color: root.power-state == "ACTIVE" ? #38bdf8 : (root.power-state == "IDLE" ? #10b981 : #f59e0b);
+                                font-size: 9px; font-weight: 800; letter-spacing: 0.6px; vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    // Wake-Word Dot
+                    Rectangle {
+                        height: 22px; width: 140px; border-radius: 4px;
+                        border-width: 1px; border-color: #10b98144; background: #10b98114;
+                        HorizontalLayout {
+                            alignment: center; spacing: 6px;
+                            Rectangle {
+                                width: 6px; height: 6px; border-radius: 3px; background: #10b981;
+                                opacity: 0.6 + 0.4 * Math.sin(root.anim-phase * 1.2rad);
+                                y: (parent.height - self.height) / 2;
+                            }
+                            Text {
+                                text: "WAKE-WORD: 'LUNA'"; color: #a7f3d0;
+                                font-size: 8px; font-weight: 700; letter-spacing: 0.5px; vertical-alignment: center;
+                            }
                         }
                     }
                 }
 
                 Rectangle { horizontal-stretch: 1; }
 
-                // System Status & Digital Clock (Center)
+                // Clock (Center)
                 VerticalLayout {
                     alignment: center; spacing: 2px;
-                    HorizontalLayout {
-                        spacing: 6px; alignment: center;
-                        Rectangle { width: 5px; height: 5px; border-radius: 2.5px; background: #10b981; }
-                        Text {
-                            text: "SYSTEM STATUS: NOMINAL  //  ALL SERVICES OPERATIONAL";
-                            color: #64748b; font-size: 8.5px; font-weight: 700; letter-spacing: 0.8px;
-                        }
-                    }
                     HorizontalLayout {
                         spacing: 8px; alignment: center;
                         Text { text: root.live-date; color: #94a3b8; font-size: 10px; font-weight: 600; }
                         Text { text: "•"; color: #334155; font-size: 10px; }
-                        Text { text: root.live-time; color: #00d2ff; font-size: 16px; font-weight: 800; letter-spacing: 1px; }
+                        Text { text: root.live-time; color: #38bdf8; font-size: 16px; font-weight: 800; letter-spacing: 1px; }
                     }
                 }
 
                 Rectangle { horizontal-stretch: 1; }
 
-                // Right Profile & Telemetry Chip
+                // Checkpoints & Admin Profile (Right)
                 HorizontalLayout {
                     spacing: 10px; alignment: center;
 
-                    // Temp Chip
+                    // Checkpoints Button
                     Rectangle {
-                        height: 34px; width: 110px; border-radius: 6px;
+                        height: 32px; width: 120px; border-radius: 5px;
                         border-width: 1px; border-color: #334155; background: #0f172a;
-                        VerticalLayout {
-                            padding: 3px; alignment: center; spacing: 0;
-                            Text { text: "CPU THERMALS"; color: #64748b; font-size: 7.5px; font-weight: 700; letter-spacing: 0.6px; horizontal-alignment: center; }
-                            Text { text: root.system-temp; color: #00d2ff; font-size: 12px; font-weight: 800; horizontal-alignment: center; }
+                        HorizontalLayout {
+                            alignment: center; spacing: 6px;
+                            Text { text: "💾"; font-size: 11px; vertical-alignment: center; }
+                            Text { text: "CHECKPOINTS"; color: #cbd5e1; font-size: 8.5px; font-weight: 700; vertical-alignment: center; }
                         }
+                        TouchArea { clicked => { root.open-checkpoint-browser(); } }
                     }
 
-                    // Admin Pill
+                    // Admin Chip
                     Rectangle {
-                        height: 34px; width: 100px; border-radius: 6px;
-                        border-width: 1px; border-color: #00d2ff44; background: #00d2ff10;
+                        height: 32px; width: 100px; border-radius: 5px;
+                        border-width: 1px; border-color: #38bdf844; background: #38bdf810;
                         HorizontalLayout {
-                            padding-left: 10px; padding-right: 10px; spacing: 6px; alignment: center;
-                            Text { text: "👤"; color: #00d2ff; font-size: 11px; vertical-alignment: center; }
-                            Text { text: "SYS_ADMIN"; color: #f1f5f9; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; vertical-alignment: center; }
+                            alignment: center; spacing: 6px;
+                            Text { text: "👤"; color: #38bdf8; font-size: 11px; vertical-alignment: center; }
+                            Text { text: "OPERATOR"; color: #f1f5f9; font-size: 9px; font-weight: 700; vertical-alignment: center; }
                         }
                     }
                 }
@@ -491,299 +437,284 @@ export component AurixCommandCenter inherits Window {
         }
 
         // ════════════════════════════════════════════════════════════════════
-        //  MAIN DASHBOARD CONTAINER (FULL VIEWPORT WIDTH & RESPONSIVE)
+        //  2. TELEMETRY & METRIC TILES ROW
         // ════════════════════════════════════════════════════════════════════
         VerticalLayout {
             vertical-stretch: 1;
-            padding-left: 24px;
-            padding-right: 24px;
-            padding-top: 16px;
-            padding-bottom: 16px;
-            spacing: 16px;
+            padding-left: 24px; padding-right: 24px;
+            padding-top: 14px; padding-bottom: 14px;
+            spacing: 14px;
 
-            // ────────────────────────────────────────────────────────
-            //  2. TOP ROW: 3 ACCURATE HARDWARE TELEMETRY CARDS
-            // ────────────────────────────────────────────────────────
             HorizontalLayout {
                 height: 105px;
-                spacing: 16px;
+                spacing: 14px;
 
-                // TILE 1: CPU USAGE
                 MetricTile {
                     horizontal-stretch: 1;
                     tile-icon: "⌁";
                     label: "CPU UTILIZATION";
                     main-value: root.cpu-display;
-                    sub-value: "SYSTEM LOAD: " + root.system-load-display;
+                    sub-value: "CORE LOAD NOMINAL";
                     amount: root.cpu-usage;
-                    accent-color: #00d2ff;
+                    accent-color: #38bdf8;
                 }
 
-                // TILE 2: CPU TEMPERATURE
-                MetricTile {
-                    horizontal-stretch: 1;
-                    tile-icon: "🌡";
-                    label: "CPU TEMPERATURE";
-                    main-value: root.system-temp;
-                    sub-value: "THERMAL STATUS: NOMINAL";
-                    amount: root.temp-usage;
-                    accent-color: #10b981;
-                }
-
-                // TILE 3: RAM UTILIZATION
                 MetricTile {
                     horizontal-stretch: 1;
                     tile-icon: "⊕";
-                    label: "RAM UTILIZATION";
+                    label: "HOST RAM (12 GB CEILING)";
                     main-value: root.ram-display;
-                    sub-value: "MEMORY LOAD: " + Math.round(root.ram-usage * 100.0) + "%";
+                    sub-value: "ACTIVE MEMORY LOAD";
                     amount: root.ram-usage;
-                    accent-color: #38bdf8;
+                    accent-color: #0284c7;
+                }
+
+                MetricTile {
+                    horizontal-stretch: 1;
+                    tile-icon: "⚡";
+                    label: "GPU VRAM (6 GB CEILING)";
+                    main-value: root.vram-display;
+                    sub-value: "RTX 4060 NF4 QUANT";
+                    amount: root.vram-usage;
+                    accent-color: #10b981;
+                }
+
+                MetricTile {
+                    horizontal-stretch: 1;
+                    tile-icon: "🌡";
+                    label: "GPU TEMPERATURE";
+                    main-value: root.system-temp;
+                    sub-value: "THERMAL LIMIT: 82°C";
+                    amount: root.temp-usage;
+                    accent-color: #f59e0b;
                 }
             }
 
-            // ────────────────────────────────────────────────────────
-            //  3. BOTTOM SECTION: VOICE CONTROLS & AI CHAT CONSOLE
-            // ────────────────────────────────────────────────────────
+            // ════════════════════════════════════════════════════════════════
+            //  3. MAIN SPLIT: ASSISTANT CORE & CHAT CONSOLE
+            // ════════════════════════════════════════════════════════════════
             HorizontalLayout {
                 vertical-stretch: 1;
-                spacing: 16px;
+                spacing: 14px;
 
-                // ── MODULAR CARD: VOICE CORE & ASSISTANT CONTROLS (~38% width) ──
+                // ── LEFT: VOICE INTERFACE & STUDENT-5B TRAINING TOGGLE ──
                 ModularCard {
-                    min-width: 320px;
-                    horizontal-stretch: 38;
+                    min-width: 330px;
+                    horizontal-stretch: 35;
                     vertical-stretch: 1;
 
                     VerticalLayout {
                         width: 100%; height: 100%;
-                        padding: 18px; spacing: 12px;
+                        padding: 16px; spacing: 12px;
 
                         // Header
                         HorizontalLayout {
                             height: 18px;
                             HorizontalLayout {
                                 spacing: 6px; alignment: center;
-                                Rectangle {
-                                    width: 7px; height: 7px; border-radius: 3.5px;
-                                    background: root.microphone-active ? #10b981 : #ef4444;
-                                }
+                                Rectangle { width: 7px; height: 7px; border-radius: 3.5px; background: #10b981; }
                                 Text {
-                                    text: "VOICE INTERFACE & AI CORE";
-                                    color: #f1f5f9; font-size: 10px; font-weight: 800; letter-spacing: 0.6px;
+                                    text: "GEMMA 3n E4B + STUDENT-5B";
+                                    color: #f1f5f9; font-size: 9.5px; font-weight: 800; letter-spacing: 0.6px;
                                 }
                             }
                             Rectangle { horizontal-stretch: 1; }
-                            Text { text: "AUR-IX.04"; color: #00d2ff; font-size: 10px; font-weight: 700; }
+                            Text { text: "LUNA.v0.2"; color: #38bdf8; font-size: 9px; font-weight: 700; }
                         }
 
-                        // Centered Animated Orb
+                        // Concentric Orb
                         VerticalLayout {
                             vertical-stretch: 1;
-                            alignment: center; spacing: 12px;
+                            alignment: center; spacing: 10px;
 
                             VoiceOrb {
                                 anim-phase: root.anim-phase;
-                                active: root.microphone-active;
+                                active: true;
                                 horizontal-stretch: 0;
                             }
 
-                            VerticalLayout {
-                                spacing: 2px; alignment: center;
-                                Text {
-                                    text: "A.U.R.I.X"; color: #ffffff;
-                                    font-size: 18px; font-weight: 900; letter-spacing: 4px;
-                                    horizontal-alignment: center;
-                                }
-                                Text {
-                                    text: "NEURAL REASONING ENGINE"; color: #64748b;
-                                    font-size: 8px; font-weight: 700; letter-spacing: 1.5px;
-                                    horizontal-alignment: center;
-                                }
-                            }
-
-                            // Status Pill
+                            // Training Controls Box
                             Rectangle {
-                                width: 250px; height: 28px; border-radius: 14px;
+                                width: 280px; height: 85px; border-radius: 6px;
                                 border-width: 1px;
-                                border-color: root.microphone-active ? #00d2ff55 : #ef444444;
-                                background: root.microphone-active ? #00d2ff14 : #ef444414;
-                                HorizontalLayout {
-                                    padding-left: 12px; padding-right: 12px; spacing: 8px; alignment: center;
-                                    Text { text: "🎙"; color: root.microphone-active ? #00d2ff : #f87171; font-size: 11px; vertical-alignment: center; }
-                                    Rectangle {
-                                        width: 6px; height: 6px; border-radius: 3px;
-                                        background: root.microphone-active ? #10b981 : #ef4444;
-                                        y: (parent.height - self.height) / 2;
-                                        opacity: root.microphone-active ? (0.5 + 0.5 * Math.sin(root.anim-phase * 1.0rad)) : 1.0;
-                                    }
-                                    Text {
-                                        text: root.microphone-active ? "Awaiting voice command..." : "Microphone muted";
-                                        color: root.microphone-active ? #bae6fd : #fca5a5;
-                                        font-size: 9.5px; font-weight: 600; vertical-alignment: center;
-                                    }
-                                }
-                            }
+                                border-color: root.training-running ? #10b98155 : #334155;
+                                background: root.training-running ? #10b98110 : #090e17;
 
-                            // Media Toggles
-                            HorizontalLayout {
-                                spacing: 10px; alignment: center;
-                                ControlToggle { icon: "◉"; label: "CAM"; active: root.camera-active; clicked => { root.camera-active = !root.camera-active; } }
-                                ControlToggle { icon: "♩"; label: "MIC"; active: root.microphone-active; clicked => { root.microphone-active = !root.microphone-active; } }
-                                ControlToggle { icon: "⌨"; label: "INPUT"; active: root.keyboard-active; clicked => { root.keyboard-active = !root.keyboard-active; } }
-                            }
-                        }
-                    }
-                }
+                                VerticalLayout {
+                                    padding: 10px; spacing: 6px;
 
-                // ── MODULAR CARD: AI CHAT & COMMAND LOG CONSOLE (~62% width) ──
-                ModularCard {
-                    min-width: 480px;
-                    horizontal-stretch: 62;
-                    vertical-stretch: 1;
-
-                            VerticalLayout {
-                                width: 100%; height: 100%;
-                                padding: 18px; spacing: 12px;
-
-                                // Header Toolbar
-                                HorizontalLayout {
-                                    height: 24px;
                                     HorizontalLayout {
-                                        spacing: 8px; alignment: center;
-                                        Text { text: "💬"; font-size: 13px; vertical-alignment: center; }
                                         Text {
-                                            text: "AI COMMAND LOG & CONVERSATION";
-                                            color: #f1f5f9; font-size: 10.5px; font-weight: 800; letter-spacing: 0.6px;
+                                            text: "STUDENT-5B QLORA";
+                                            color: root.training-running ? #34d399 : #94a3b8;
+                                            font-size: 8px; font-weight: 800; letter-spacing: 0.6px;
+                                            vertical-alignment: center;
+                                        }
+                                        Rectangle { horizontal-stretch: 1; }
+                                        Text {
+                                            text: "Step " + root.training-step + " | Rank " + root.training-rank;
+                                            color: #cbd5e1; font-size: 8px; font-weight: 700;
                                             vertical-alignment: center;
                                         }
                                     }
 
-                                    Rectangle { horizontal-stretch: 1; }
-
-                                    // Action Buttons
-                                    HorizontalLayout {
-                                        spacing: 8px; alignment: center;
-
-                                        Rectangle {
-                                            width: 82px; height: 24px; border-radius: 4px;
-                                            border-width: 1px; border-color: #334155; background: #1e293b66;
+                                    // Big Start / Stop Training Toggle Button
+                                    Rectangle {
+                                        height: 32px; border-radius: 4px;
+                                        background: root.training-running ? #ef4444 : #0284c7;
+                                        HorizontalLayout {
+                                            alignment: center; spacing: 6px;
                                             Text {
-                                                text: "CLEAR CHAT"; color: #94a3b8;
-                                                font-size: 8px; font-weight: 700; letter-spacing: 0.5px;
-                                                horizontal-alignment: center; vertical-alignment: center;
+                                                text: root.training-running ? "⏹ STOP TRAINING" : "▶ START CONTINUOUS TRAINING";
+                                                color: #ffffff; font-size: 9.5px; font-weight: 800; letter-spacing: 0.8px;
+                                                vertical-alignment: center;
                                             }
-                                            TouchArea { clicked => { root.clear-conversation(); } }
                                         }
-
-                                        Rectangle {
-                                            width: 86px; height: 24px; border-radius: 4px;
-                                            border-width: 1px; border-color: #334155; background: #1e293b66;
-                                            Text {
-                                                text: "EXPORT LOG"; color: #94a3b8;
-                                                font-size: 8px; font-weight: 700; letter-spacing: 0.5px;
-                                                horizontal-alignment: center; vertical-alignment: center;
-                                            }
-                                            TouchArea { clicked => { root.export-conversation(); } }
-                                        }
+                                        TouchArea { clicked => { root.toggle-training(); } }
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
 
-                                // Message History Scroll Area
-                                ScrollView {
-                                    vertical-stretch: 1;
-                                    VerticalLayout {
-                                        padding: 4px; spacing: 10px;
+                // ── RIGHT: CONVERSATION & COMMAND EXECUTION CONSOLE ──
+                ModularCard {
+                    min-width: 480px;
+                    horizontal-stretch: 65;
+                    vertical-stretch: 1;
 
-                                        for msg in root.messages: HorizontalLayout {
-                                            spacing: 10px; alignment: start;
+                    VerticalLayout {
+                        width: 100%; height: 100%;
+                        padding: 16px; spacing: 10px;
 
-                                            // Avatar icon
-                                            Rectangle {
-                                                width: 26px; height: 26px; border-radius: 6px;
-                                                border-width: 1px;
-                                                border-color: msg.sender == "USER" ? #00d2ff55 : #38bdf855;
-                                                background: msg.sender == "USER" ? #00d2ff18 : #0f172a;
-                                                vertical-stretch: 0;
-                                                Text {
-                                                    text: msg.sender == "USER" ? "👤" : "⬡";
-                                                    color: msg.sender == "USER" ? #00d2ff : #38bdf8;
-                                                    font-size: 11px;
-                                                    horizontal-alignment: center; vertical-alignment: center;
-                                                }
-                                            }
-
-                                            // Message Bubble
-                                            Rectangle {
-                                                horizontal-stretch: 1;
-                                                border-radius: 6px;
-                                                background: msg.sender == "USER" ? #0284c718 : #1e293b88;
-                                                border-width: 1px;
-                                                border-color: msg.sender == "USER" ? #0284c744 : #334155;
-
-                                                VerticalLayout {
-                                                    padding: 10px;
-                                                    spacing: 4px;
-                                                    HorizontalLayout {
-                                                        Text {
-                                                            text: msg.sender;
-                                                            color: msg.sender == "USER" ? #38bdf8 : #00d2ff;
-                                                            font-size: 8.5px; font-weight: 800; letter-spacing: 0.6px;
-                                                        }
-                                                    }
-                                                    Text {
-                                                        text: msg.text;
-                                                        color: #f1f5f9;
-                                                        font-size: 11px;
-                                                        wrap: word-wrap;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+                        // Header Toolbar
+                        HorizontalLayout {
+                            height: 24px;
+                            HorizontalLayout {
+                                spacing: 8px; alignment: center;
+                                Text { text: "💬"; font-size: 13px; vertical-alignment: center; }
+                                Text {
+                                    text: "LUNA INTELLIGENCE CONSOLE";
+                                    color: #f1f5f9; font-size: 10px; font-weight: 800; letter-spacing: 0.6px;
+                                    vertical-alignment: center;
                                 }
+                            }
 
-                                // Command Line Input Bar
+                            Rectangle { horizontal-stretch: 1; }
+
+                            HorizontalLayout {
+                                spacing: 8px; alignment: center;
                                 Rectangle {
-                                    height: 40px; border-radius: 6px;
-                                    border-width: 1px; border-color: #334155; background: #090e17;
+                                    width: 78px; height: 24px; border-radius: 4px;
+                                    border-width: 1px; border-color: #334155; background: #1e293b66;
+                                    Text {
+                                        text: "CLEAR"; color: #94a3b8;
+                                        font-size: 8px; font-weight: 700;
+                                        horizontal-alignment: center; vertical-alignment: center;
+                                    }
+                                    TouchArea { clicked => { root.clear-conversation(); } }
+                                }
+                                Rectangle {
+                                    width: 78px; height: 24px; border-radius: 4px;
+                                    border-width: 1px; border-color: #334155; background: #1e293b66;
+                                    Text {
+                                        text: "EXPORT"; color: #94a3b8;
+                                        font-size: 8px; font-weight: 700;
+                                        horizontal-alignment: center; vertical-alignment: center;
+                                    }
+                                    TouchArea { clicked => { root.export-conversation(); } }
+                                }
+                            }
+                        }
 
-                                    HorizontalLayout {
-                                        padding-left: 10px; padding-right: 8px;
-                                        padding-top: 4px; padding-bottom: 4px;
-                                        spacing: 8px;
+                        // Message History
+                        ScrollView {
+                            vertical-stretch: 1;
+                            VerticalLayout {
+                                padding: 4px; spacing: 10px;
 
-                                        Rectangle {
-                                            horizontal-stretch: 1;
-                                            LineEdit {
-                                                width: 100%; height: 100%;
-                                                text <=> root.message-text;
-                                                placeholder-text: "Type a command or ask AURIX anything...";
+                                for msg in root.messages: HorizontalLayout {
+                                    spacing: 10px; alignment: start;
+
+                                    Rectangle {
+                                        width: 26px; height: 26px; border-radius: 6px;
+                                        border-width: 1px;
+                                        border-color: msg.sender == "USER" ? #38bdf855 : #10b98155;
+                                        background: msg.sender == "USER" ? #38bdf818 : #0f172a;
+                                        vertical-stretch: 0;
+                                        Text {
+                                            text: msg.sender == "USER" ? "👤" : "🌙";
+                                            font-size: 11px;
+                                            horizontal-alignment: center; vertical-alignment: center;
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                        border-radius: 6px;
+                                        background: msg.sender == "USER" ? #0284c718 : #1e293b88;
+                                        border-width: 1px;
+                                        border-color: msg.sender == "USER" ? #0284c744 : #334155;
+
+                                        VerticalLayout {
+                                            padding: 10px; spacing: 4px;
+                                            Text {
+                                                text: msg.sender;
+                                                color: msg.sender == "USER" ? #38bdf8 : #34d399;
+                                                font-size: 8px; font-weight: 800; letter-spacing: 0.6px;
+                                            }
+                                            Text {
+                                                text: msg.text;
+                                                color: #f1f5f9;
                                                 font-size: 11px;
-                                                accepted => {
-                                                    if root.message-text != "" {
-                                                        root.send-message(root.message-text);
-                                                        root.message-text = "";
-                                                    }
-                                                }
+                                                wrap: word-wrap;
                                             }
                                         }
+                                    }
+                                }
+                            }
+                        }
 
-                                        Rectangle {
-                                            width: 32px; height: 32px; border-radius: 6px;
-                                            background: #0284c7;
-                                            y: (parent.height - self.height) / 2;
-                                            Text {
-                                                text: "➤"; color: #ffffff; font-size: 12px;
-                                                horizontal-alignment: center; vertical-alignment: center;
+                        // Input Bar
+                        Rectangle {
+                            height: 42px; border-radius: 6px;
+                            border-width: 1px; border-color: #334155; background: #090e17;
+
+                            HorizontalLayout {
+                                padding-left: 10px; padding-right: 8px;
+                                padding-top: 4px; padding-bottom: 4px;
+                                spacing: 8px;
+
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    LineEdit {
+                                        width: 100%; height: 100%;
+                                        text <=> root.message-text;
+                                        placeholder-text: "Ask LUNA or provide command instructions...";
+                                        font-size: 11px;
+                                        accepted => {
+                                            if root.message-text != "" {
+                                                root.send-message(root.message-text);
+                                                root.message-text = "";
                                             }
-                                            TouchArea {
-                                                clicked => {
-                                                    if root.message-text != "" {
-                                                        root.send-message(root.message-text);
-                                                        root.message-text = "";
-                                                    }
-                                                }
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 34px; height: 34px; border-radius: 6px;
+                                    background: #0284c7;
+                                    y: (parent.height - self.height) / 2;
+                                    Text {
+                                        text: "➤"; color: #ffffff; font-size: 12px;
+                                        horizontal-alignment: center; vertical-alignment: center;
+                                    }
+                                    TouchArea {
+                                        clicked => {
+                                            if root.message-text != "" {
+                                                root.send-message(root.message-text);
+                                                root.message-text = "";
                                             }
                                         }
                                     }
@@ -792,14 +723,16 @@ export component AurixCommandCenter inherits Window {
                         }
                     }
                 }
+            }
+        }
 
         // ════════════════════════════════════════════════════════════════════
-        //  TOAST NOTIFICATION
+        //  TOAST MESSAGE
         // ════════════════════════════════════════════════════════════════════
-        if root.toast-visible : Rectangle {
+        if root.toast-visible: Rectangle {
             height: 36px;
-            background: #00d2ff18;
-            border-width: 1px; border-color: #00d2ff55;
+            background: #38bdf818;
+            border-width: 1px; border-color: #38bdf855;
             HorizontalLayout {
                 padding-left: 18px; spacing: 8px; alignment: center;
                 Rectangle { width: 6px; height: 6px; border-radius: 3px; background: #10b981; y: (parent.height - self.height) / 2; }
@@ -808,50 +741,95 @@ export component AurixCommandCenter inherits Window {
         }
     }
 
-    // Review Card Overlay (Approval Modal Dialog)
-    if root.review-card-visible: Rectangle {
-        width: 100%;
-        height: 100%;
-        background: #000000bb;
-        z: 30;
+    // ════════════════════════════════════════════════════════════════════
+    //  CHECKPOINT BROWSER MODAL OVERLAY
+    // ════════════════════════════════════════════════════════════════════
+    if root.checkpoint-browser-visible: Rectangle {
+        width: 100%; height: 100%;
+        background: #000000cc;
+        z: 50;
 
-        // Dismiss when clicking outside
-        TouchArea {
-            clicked => { root.review-card-visible = false; }
-        }
+        TouchArea { clicked => { root.checkpoint-browser-visible = false; } }
 
-        ReviewCard {
+        Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: Math.min(parent.width - 40px, 640px);
-            approve => {
-                root.review-card-visible = false;
-                root.review-approve();
-            }
-            edit => {
-                root.review-edit();
-            }
-            reject => {
-                root.review-card-visible = false;
-                root.review-reject();
+            width: Math.min(parent.width - 60px, 680px);
+            height: 440px;
+            border-radius: 8px;
+            border-width: 1px; border-color: #38bdf855;
+            background: #0f172a;
+
+            VerticalLayout {
+                padding: 18px; spacing: 12px;
+
+                HorizontalLayout {
+                    Text { text: "💾 LUNA Checkpoint Browser"; color: #ffffff; font-size: 13px; font-weight: 800; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Rectangle {
+                        width: 24px; height: 24px; border-radius: 12px; background: #1e293b;
+                        Text { text: "✕"; color: #94a3b8; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea { clicked => { root.checkpoint-browser-visible = false; } }
+                    }
+                }
+
+                Text {
+                    text: "Select a versioned checkpoint to restore. Restoring requires Trust Token confirmation.";
+                    color: #94a3b8; font-size: 9px;
+                }
+
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 8px;
+                        for ckpt in root.checkpoints: Rectangle {
+                            height: 52px; border-radius: 6px;
+                            border-width: 1px; border-color: #334155; background: #1e293b66;
+                            HorizontalLayout {
+                                padding-left: 12px; padding-right: 12px; spacing: 10px; alignment: center;
+                                VerticalLayout {
+                                    horizontal-stretch: 1; alignment: center; spacing: 2px;
+                                    Text { text: ckpt.checkpoint-id; color: #38bdf8; font-size: 10px; font-weight: 700; }
+                                    Text { text: "Saved: " + ckpt.iso-time + " | Step " + ckpt.step-count + " | Loss: " + ckpt.eval-loss; color: #64748b; font-size: 8px; }
+                                }
+                                Rectangle {
+                                    width: 80px; height: 28px; border-radius: 4px;
+                                    background: #0284c7;
+                                    Text { text: "RESTORE"; color: #ffffff; font-size: 8.5px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                                    TouchArea {
+                                        clicked => {
+                                            root.checkpoint-browser-visible = false;
+                                            root.restore-checkpoint(ckpt.checkpoint-id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
-    // Alert Modal Overlay (Self-Healing Modal Dialog)
+    // ── Review Card Overlay (Trust Token Confirmation) ───────────────────────
+    if root.review-card-visible: Rectangle {
+        width: 100%; height: 100%; background: #000000bb; z: 30;
+        TouchArea { clicked => { root.review-card-visible = false; } }
+        ReviewCard {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: Math.min(parent.width - 40px, 640px);
+            approve => { root.review-card-visible = false; root.review-approve(); }
+            edit => { root.review-edit(); }
+            reject => { root.review-card-visible = false; root.review-reject(); }
+        }
+    }
+
+    // ── Alert Modal Overlay (Self-Healing 5s Countdown) ─────────────────────
     if root.alert-modal-visible: AlertModal {
         z: 40;
-        retry => {
-            root.alert-modal-visible = false;
-            root.alert-retry();
-        }
-        cancel => {
-            root.alert-modal-visible = false;
-            root.alert-cancel();
-        }
-        close => {
-            root.alert-modal-visible = false;
-            root.alert-close();
-        }
+        retry => { root.alert-modal-visible = false; root.alert-retry(); }
+        cancel => { root.alert-modal-visible = false; root.alert-cancel(); }
+        close => { root.alert-modal-visible = false; root.alert-close(); }
     }
 }

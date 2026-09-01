@@ -13,6 +13,9 @@ env/
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyd
+*.so
+*.dll
 .pytest_cache/
 .coverage
 htmlcov/
@@ -29,6 +32,7 @@ dist/
 .env
 .env.*
 !.env.example
+*.key
 
 # Vector Database & Telemetry Local Storage (ChromaDB, SQLite, etc.)
 chroma_data/
@@ -43,6 +47,9 @@ chroma_db/
 *.parquet
 !data_pipeline/storage/schema.sql
 test_checkpoint_tmp/
+data/
+databases/
+logs/
 
 # Checkpoints & Model Weights
 *.pt
@@ -50,6 +57,7 @@ test_checkpoint_tmp/
 *.safetensors
 adapters/
 checkpoints/
+models/
 
 # IDE & OS Specific
 .vscode/
@@ -64,4 +72,4 @@ scratch/
 *.o
 *.a
 *.lib
-
+pdf_preview/
