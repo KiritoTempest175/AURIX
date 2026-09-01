@@ -203,6 +203,22 @@ fn test_hardware_monitor_starts_without_crash() {
     });
 }
 
+#[test]
+fn test_idle_monitor_session_and_tick() {
+    use core_engine::governor::idle_monitor::create_idle_monitor;
+
+    let monitor = create_idle_monitor();
+    let idle_secs = monitor.get_idle_seconds();
+    let is_locked = monitor.is_screen_locked();
+
+    eprintln!(
+        "[Integration Test] IdleMonitor: idle_secs={}, is_locked={}",
+        idle_secs, is_locked
+    );
+    // idle_secs is a non-negative u64, is_locked is a boolean
+    assert!(idle_secs < 1_000_000_000, "idle seconds should be reasonable");
+}
+
 // ─── 5. File Jail Tests (valid paths only) ──────────────────────────────────
 // Escape / panic tests are in tests/test_file_jail.rs.
 

@@ -14,7 +14,11 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from ai_engine.training.checkpoint_manager import CheckpointManager, get_default_checkpoint_manager
+from ai_engine.training.checkpoint_manager import (
+    CheckpointManager,
+    CheckpointManifest,
+    get_default_checkpoint_manager,
+)
 
 logger = logging.getLogger("luna.ai_engine.student_training")
 
@@ -52,14 +56,14 @@ class LunaGovernorCallback(TrainerCallback if TORCH_AVAILABLE else object):
         # 1. OS Shutdown / Suspend Signal (State 3 = Suspending)
         if power_state == 3:
             logger.critical("LUNA Governor signaled OS SUSPENDING. Saving emergency checkpoint immediately...")
-            self._save_emergency_checkpoint(kwargs.get("model"), state.global_step)
+            self._save_emergency_checkpoint(kwargs.get("model"), state.global_step, kwargs.get("optimizer"))
             control.should_training_stop = True
             return control
 
         # 2. Hardware Ceiling Overload
         if self.check_suspended_fn():
             logger.warning("LUNA Governor signaled HARDWARE LIMIT BREACH. Pausing training and purging VRAM...")
-            self._save_emergency_checkpoint(kwargs.get("model"), state.global_step)
+            self._save_emergency_checkpoint(kwargs.get("model"), state.global_step, kwargs.get("optimizer"))
             if torch and torch.cuda.is_available():
                 torch.cuda.empty_cache()
             gc.collect()
@@ -71,19 +75,29 @@ class LunaGovernorCallback(TrainerCallback if TORCH_AVAILABLE else object):
 
         return control
 
-    def _save_emergency_checkpoint(self, model: Any, step: int) -> None:
-        """Serialize adapter weights and persist through CheckpointManager."""
+    def _save_emergency_checkpoint(self, model: Any, step: int, optimizer: Any = None) -> None:
+        """Serialize adapter weights and training extra_state, then persist through CheckpointManager."""
         try:
             if model is not None and hasattr(model, "state_dict"):
-                # Save adapter state
                 import io
                 buf = io.BytesIO()
                 torch.save(model.state_dict(), buf)
+
+                extra_state: Dict[str, Any] = {}
+                if optimizer is not None and hasattr(optimizer, "state_dict"):
+                    extra_state["optimizer_state"] = optimizer.state_dict()
+                if TORCH_AVAILABLE and torch is not None:
+                    try:
+                        extra_state["rng_state"] = torch.random.get_rng_state().tolist()
+                    except Exception:
+                        pass
+
                 self.checkpoint_manager.save_checkpoint(
                     weights_data=buf.getvalue(),
                     step_count=step,
                     dataset_version_hash="telemetry_live",
                     lora_rank=16,
+                    extra_state=extra_state if extra_state else None,
                 )
         except Exception as e:
             logger.error(f"Failed to persist emergency checkpoint: {e}")
@@ -143,6 +157,49 @@ class StudentTrainingController:
         logger.info("Student-5B training stopped.")
         return True
 
+    def resume_from_latest_checkpoint(
+        self, model: Any = None, optimizer: Any = None
+    ) -> Optional[CheckpointManifest]:
+        """Restore model weights, optimizer state, and RNG state from the latest valid checkpoint."""
+        loaded = self.checkpoint_manager.load_latest_checkpoint()
+        if loaded is None:
+            logger.info("No checkpoint found to resume.")
+            return None
+
+        weights_bytes, manifest, extra_state = loaded
+        self.current_step = manifest.step_count
+        self.current_rank = manifest.lora_rank
+        if manifest.eval_loss is not None:
+            self.current_loss = manifest.eval_loss
+
+        # Apply weights to model if provided
+        if model is not None and TORCH_AVAILABLE and torch is not None:
+            import io
+            buf = io.BytesIO(weights_bytes)
+            state_dict = torch.load(buf, map_location="cpu")
+            if hasattr(model, "load_state_dict"):
+                model.load_state_dict(state_dict)
+
+        # Restore optimizer and RNG extra state
+        if extra_state:
+            if optimizer is not None and "optimizer_state" in extra_state:
+                if hasattr(optimizer, "load_state_dict"):
+                    try:
+                        optimizer.load_state_dict(extra_state["optimizer_state"])
+                        logger.info("Successfully restored optimizer state dict.")
+                    except Exception as e:
+                        logger.warning(f"Failed to restore optimizer state: {e}")
+            if "rng_state" in extra_state and TORCH_AVAILABLE and torch is not None:
+                try:
+                    rng_bytes = torch.ByteTensor(extra_state["rng_state"])
+                    torch.random.set_rng_state(rng_bytes)
+                    logger.info("Successfully restored PyTorch RNG state.")
+                except Exception as e:
+                    logger.warning(f"Could not restore RNG state: {e}")
+
+        logger.info(f"Resumed training state from checkpoint '{manifest.checkpoint_id}' (Step {manifest.step_count})")
+        return manifest
+
     def get_status(self) -> Dict[str, Any]:
         """Return live telemetry metrics for UI dashboard."""
         return {
@@ -156,6 +213,22 @@ class StudentTrainingController:
 
     def _run_training_worker(self) -> None:
         """Worker loop simulating or executing continuous fine-tuning steps."""
+        # Attempt to resume from existing latest checkpoint on worker startup
+        latest = self.checkpoint_manager.load_latest_checkpoint()
+        if latest is not None:
+            _, manifest, extra_state = latest
+            self.current_step = manifest.step_count
+            self.current_rank = manifest.lora_rank
+            if manifest.eval_loss is not None:
+                self.current_loss = manifest.eval_loss
+            if extra_state and TORCH_AVAILABLE and torch is not None and "rng_state" in extra_state:
+                try:
+                    rng_bytes = torch.ByteTensor(extra_state["rng_state"])
+                    torch.random.set_rng_state(rng_bytes)
+                except Exception:
+                    pass
+            logger.info(f"Worker resumed from checkpoint {manifest.checkpoint_id} at step {self.current_step}")
+
         step = self.current_step
         while not self._stop_requested.is_set():
             time.sleep(2.0)
@@ -166,12 +239,17 @@ class StudentTrainingController:
             # Simulate periodic checkpoint persistence every 25 steps
             if step % 25 == 0:
                 mock_weights = f"MOCK_LUNA_STUDENT_WEIGHTS_STEP_{step}".encode("utf-8")
+                mock_extra_state = {
+                    "optimizer_state": {"step": step, "lr": 0.0002},
+                    "rng_seed": 42 + step,
+                }
                 self.checkpoint_manager.save_checkpoint(
                     weights_data=mock_weights,
                     step_count=step,
                     dataset_version_hash=f"dataset_v1_step_{step}",
                     lora_rank=self.current_rank,
                     eval_loss=self.current_loss,
+                    extra_state=mock_extra_state,
                 )
                 logger.info(f"Student-5B checkpoint persisted at step {step} (loss: {self.current_loss:.4f})")
 

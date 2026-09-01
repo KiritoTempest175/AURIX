@@ -21,6 +21,11 @@ from security.encryption import CheckpointEncryptor, get_default_encryptor
 logger = logging.getLogger("luna.ai_engine.checkpoint_manager")
 
 
+class CheckpointNotFoundError(FileNotFoundError):
+    """Raised when a specific checkpoint ID does not exist or cannot be found."""
+    pass
+
+
 @dataclass
 class CheckpointManifest:
     """Metadata manifest describing a saved training checkpoint."""
@@ -119,7 +124,7 @@ class CheckpointManager:
             weights_file.write_bytes(weights_data)
 
         # Save extra state (optimizer/RNG) if provided
-        if extra_state:
+        if extra_state is not None:
             state_file = ckpt_dir / "training_state.json"
             if self.encrypt_at_rest:
                 enc_state = self.encryptor.encrypt_json(extra_state)
@@ -172,11 +177,13 @@ class CheckpointManager:
         # Atomic replace
         os.replace(temp_pointer, self.pointer_file)
 
-    def load_latest_checkpoint(self) -> Optional[Tuple[bytes, CheckpointManifest]]:
+    def load_latest_checkpoint(
+        self,
+    ) -> Optional[Tuple[bytes, CheckpointManifest, Optional[Dict[str, Any]]]]:
         """Load and verify the latest checkpoint. Automatically rolls back if corrupted.
 
         Returns:
-            Tuple of (decrypted_weights_bytes, manifest) or None if no checkpoints exist.
+            Tuple of (decrypted_weights_bytes, manifest, extra_state) or None if no checkpoints exist.
         """
         if not self.pointer_file.exists():
             logger.info("No latest_checkpoint.json pointer found. Initializing from baseline.")
@@ -194,8 +201,40 @@ class CheckpointManager:
             logger.error(f"Failed to load latest checkpoint: {e}. Initiating automatic rollback.")
             return self._rollback_to_previous()
 
-    def _load_and_verify_dir(self, ckpt_dir: Path) -> Optional[Tuple[bytes, CheckpointManifest]]:
-        """Verify hash and decrypt checkpoint from directory."""
+    def load_checkpoint(
+        self, checkpoint_id: str
+    ) -> Tuple[bytes, CheckpointManifest, Optional[Dict[str, Any]]]:
+        """Load and verify a specific checkpoint by ID and update the latest pointer.
+
+        Args:
+            checkpoint_id: The ID of the checkpoint directory to restore.
+
+        Returns:
+            Tuple of (decrypted_weights_bytes, manifest, extra_state).
+
+        Raises:
+            CheckpointNotFoundError: If the checkpoint directory does not exist.
+            ValueError: If manifest/weights are missing, integrity check fails, or decryption fails.
+        """
+        ckpt_dir = self.checkpoint_dir / checkpoint_id
+        if not ckpt_dir.exists() or not ckpt_dir.is_dir():
+            raise CheckpointNotFoundError(
+                f"Checkpoint '{checkpoint_id}' not found in {self.checkpoint_dir}"
+            )
+
+        result = self._load_and_verify_dir(ckpt_dir)
+        if result is None:
+            raise ValueError(f"Failed to load checkpoint '{checkpoint_id}'")
+
+        _, manifest, _ = result
+        self._update_pointer_atomic(manifest)
+        logger.info(f"Successfully restored checkpoint '{checkpoint_id}' and updated pointer.")
+        return result
+
+    def _load_and_verify_dir(
+        self, ckpt_dir: Path
+    ) -> Optional[Tuple[bytes, CheckpointManifest, Optional[Dict[str, Any]]]]:
+        """Verify hash, decrypt weights, and load extra_state from checkpoint directory."""
         if not ckpt_dir.exists():
             raise FileNotFoundError(f"Checkpoint directory {ckpt_dir} does not exist")
 
@@ -222,9 +261,21 @@ class CheckpointManager:
         else:
             weights = raw_payload
 
-        return weights, manifest
+        # Load extra state (optimizer/RNG) if present
+        extra_state: Optional[Dict[str, Any]] = None
+        state_file = ckpt_dir / "training_state.json"
+        if state_file.exists():
+            if manifest.is_encrypted:
+                enc_state = state_file.read_text(encoding="utf-8")
+                extra_state = self.encryptor.decrypt_json(enc_state)
+            else:
+                extra_state = json.loads(state_file.read_text(encoding="utf-8"))
 
-    def _rollback_to_previous(self) -> Optional[Tuple[bytes, CheckpointManifest]]:
+        return weights, manifest, extra_state
+
+    def _rollback_to_previous(
+        self,
+    ) -> Optional[Tuple[bytes, CheckpointManifest, Optional[Dict[str, Any]]]]:
         """Rollback to the most recent valid historical checkpoint."""
         history = self.list_checkpoints()
         for ckpt_meta in history:
@@ -232,7 +283,7 @@ class CheckpointManager:
             try:
                 result = self._load_and_verify_dir(ckpt_dir)
                 if result is not None:
-                    _, manifest = result
+                    _, manifest, _ = result
                     logger.warning(f"Rolled back to valid checkpoint '{manifest.checkpoint_id}'")
                     self._update_pointer_atomic(manifest)
                     return result

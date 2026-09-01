@@ -16,7 +16,10 @@ from tests.python.test_gemma_model import (
 )
 from tests.python.test_checkpoint_manager import (
     test_checkpoint_save_and_load_roundtrip,
+    test_checkpoint_load_without_extra_state,
     test_checkpoint_automatic_rollback_on_corruption,
+    test_load_checkpoint_by_id_success,
+    test_load_checkpoint_by_id_failure,
     get_temp_ckpt_dir,
 )
 from tests.python.test_secret_scrubber import (
@@ -50,7 +53,10 @@ class LunaTestSuite(unittest.TestCase):
     def test_checkpoint_suite(self):
         with get_temp_ckpt_dir() as d:
             test_checkpoint_save_and_load_roundtrip(d)
+            test_checkpoint_load_without_extra_state(d)
             test_checkpoint_automatic_rollback_on_corruption(d)
+            test_load_checkpoint_by_id_success(d)
+            test_load_checkpoint_by_id_failure(d)
 
     def test_security_scrubber_suite(self):
         test_secret_scrubber_api_keys()

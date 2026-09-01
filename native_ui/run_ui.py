@@ -196,10 +196,17 @@ class LunaController:
         self.app.checkpoint_browser_visible = True
 
     def _handle_restore_checkpoint(self, checkpoint_id: str) -> None:
-        """Restores a versioned checkpoint."""
+        """Restores a versioned checkpoint by ID."""
         logger.info(f"Restoring checkpoint '{checkpoint_id}'...")
-        self.app.toast_message = f"Restored Checkpoint: {checkpoint_id}"
-        self.app.toast_visible = True
+        try:
+            self.checkpoint_manager.load_checkpoint(checkpoint_id)
+            self.app.toast_message = f"Restored Checkpoint: {checkpoint_id}"
+            self.app.toast_visible = True
+            logger.info(f"Successfully restored checkpoint '{checkpoint_id}'")
+        except Exception as e:
+            logger.error(f"Failed to restore checkpoint '{checkpoint_id}': {e}")
+            self.app.toast_message = f"Restore Failed: {e}"
+            self.app.toast_visible = True
 
     def _handle_clear_conversation(self) -> None:
         welcome = {
