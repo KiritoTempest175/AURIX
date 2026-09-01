@@ -1,0 +1,25 @@
+# LUNA / AURIX Core Dependencies
+slint
+psutil>=5.9.0
+cryptography>=42.0.0
+pydantic>=2.6.0
+sqlalchemy>=2.0.28
+pandas>=2.2.0
+numpy>=1.26.0
+pyarrow>=14.0.0
+tqdm>=4.66.0
+rich>=13.7.0
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# AI Engine & Inference
+torch>=2.2.0
+transformers>=4.38.0
+datasets>=2.18.0
+sentence-transformers>=2.5.0
+bitsandbytes>=0.42.0
+accelerate>=0.28.0
+
+# Data Pipeline & Vector Storage
+chromadb>=0.4.24
+faiss-cpu>=1.7.4

@@ -299,10 +299,15 @@ def main() -> None:
     ui = slint.load_file(slint_file)
     app = ui.AurixCommandCenter()
 
-    LunaController(app)
+    controller = LunaController(app)
 
     logger.info("🚀 Launching LUNA Command Center GUI...")
-    app.run()
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        logger.info("KeyboardInterrupt received.")
+    finally:
+        logger.info("🌙 LUNA Command Center GUI session ended cleanly.")
 
 
 if __name__ == "__main__":

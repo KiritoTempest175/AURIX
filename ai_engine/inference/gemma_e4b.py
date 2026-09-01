@@ -17,14 +17,21 @@ logger = logging.getLogger("luna.ai_engine.gemma_e4b")
 
 try:
     import torch
-    from transformers import AutoTokenizer, BitsAndBytesConfig
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    TORCH_AVAILABLE = True
+except ImportError:
+    torch = None
+    AutoModelForCausalLM = None
+    AutoTokenizer = None
+    BitsAndBytesConfig = None
+    TORCH_AVAILABLE = False
+
+try:
     from unsloth import FastLanguageModel
     UNSLOTH_AVAILABLE = True
 except ImportError:
-    torch = None
     FastLanguageModel = None
     UNSLOTH_AVAILABLE = False
-    logger.warning("Unsloth / PyTorch not available in current environment. Running in fallback mode.")
 
 
 class GemmaModelRunner:
@@ -69,27 +76,44 @@ class GemmaModelRunner:
 
     def _initialize_model(self) -> None:
         """Load Gemma 3n model weights or initialize offline fallback."""
-        if not UNSLOTH_AVAILABLE or self.device == "cpu":
-            logger.info("Initializing GemmaModelRunner in offline fallback mode.")
+        if not TORCH_AVAILABLE:
+            logger.info("PyTorch / Transformers not installed. Operating in offline fallback mode.")
             self.is_loaded = True
             return
 
         try:
-            logger.info(
-                f"Loading Gemma 3n ({self.effective_params}) from '{self.model_name}' "
-                f"in 4-bit {self.quantization.upper()}..."
-            )
-            self.model, self.tokenizer = FastLanguageModel.from_pretrained(
-                model_name=self.model_name,
-                max_seq_length=self.max_seq_length,
-                load_in_4bit=self.load_in_4bit,
-                fast_inference=True,
-            )
-            FastLanguageModel.for_inference(self.model)
+            if UNSLOTH_AVAILABLE and self.device == "cuda":
+                logger.info(
+                    f"Loading Gemma 3n ({self.effective_params}) with Unsloth from '{self.model_name}' "
+                    f"in 4-bit {self.quantization.upper()}..."
+                )
+                self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                    model_name=self.model_name,
+                    max_seq_length=self.max_seq_length,
+                    load_in_4bit=self.load_in_4bit,
+                    fast_inference=True,
+                )
+                FastLanguageModel.for_inference(self.model)
+            else:
+                logger.info(f"Checking Gemma 3n weights '{self.model_name}' via HuggingFace Transformers (device={self.device})...")
+                self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+                quant_config = None
+                if self.load_in_4bit and self.device == "cuda" and BitsAndBytesConfig:
+                    quant_config = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_quant_type=self.quantization,
+                        bnb_4bit_compute_dtype=torch.float16,
+                    )
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name,
+                    quantization_config=quant_config,
+                    device_map="auto" if self.device == "cuda" else None,
+                    torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+                )
             self.is_loaded = True
             logger.info("Gemma 3n E4B successfully loaded for inference.")
         except Exception as e:
-            logger.warning(f"Could not load Gemma weights ({e}). Falling back to deterministic offline runner.")
+            logger.info(f"Local weights not found or offline ({e}). Operating in deterministic reasoning mode.")
             self.is_loaded = True
 
     def set_effective_parameters(self, mode: str) -> None:
@@ -199,3 +223,29 @@ def get_default_gemma_runner() -> GemmaModelRunner:
     if _GLOBAL_RUNNER is None:
         _GLOBAL_RUNNER = GemmaModelRunner()
     return _GLOBAL_RUNNER
+
+
+if __name__ == "__main__":
+    import sys
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    print("[LUNA] Initializing Gemma 3n E4B Runner...")
+    runner = get_default_gemma_runner()
+    
+    test_queries = [
+        "Check system status and hardware metrics",
+        "Inspect power governor state",
+        "Verify checkpoint snapshot integrity"
+    ]
+    
+    for q in test_queries:
+        prompt = runner.format_chat_prompt(q)
+        response = runner.generate_response(prompt)
+        print(f"\n[User]: {q}")
+        print(f"[LUNA]: {response}")
+
+

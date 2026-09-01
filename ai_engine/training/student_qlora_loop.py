@@ -25,15 +25,25 @@ logger = logging.getLogger("luna.ai_engine.student_training")
 try:
     import torch
     from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
-    from trl import SFTTrainer
-    from unsloth import FastLanguageModel
     TORCH_AVAILABLE = True
 except ImportError:
     torch = None
-    FastLanguageModel = None
     TrainerCallback = object
     TORCH_AVAILABLE = False
-    logger.warning("Unsloth / Torch not available. Running Student Training Loop in mock controller mode.")
+
+try:
+    from unsloth import FastLanguageModel
+    UNSLOTH_AVAILABLE = True
+except ImportError:
+    FastLanguageModel = None
+    UNSLOTH_AVAILABLE = False
+
+try:
+    from trl import SFTTrainer
+    TRL_AVAILABLE = True
+except ImportError:
+    SFTTrainer = None
+    TRL_AVAILABLE = False
 
 
 class LunaGovernorCallback(TrainerCallback if TORCH_AVAILABLE else object):
