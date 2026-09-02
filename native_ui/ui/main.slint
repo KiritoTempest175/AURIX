@@ -282,6 +282,7 @@ export component AurixCommandCenter inherits Window {
     callback restore-checkpoint(string);
     callback clear-conversation();
     callback export-conversation();
+    callback trigger-voice();
 
     callback alert-primary-action();
     callback alert-secondary-action();
@@ -333,7 +334,7 @@ export component AurixCommandCenter inherits Window {
                         border-width: 1px; border-color: #38bdf855;
                         background: #38bdf814;
                         Text {
-                            text: "🌙"; font-size: 16px;
+                            text: "◆"; color: #38bdf8; font-size: 16px; font-weight: 900;
                             horizontal-alignment: center; vertical-alignment: center;
                         }
                     }
@@ -416,7 +417,7 @@ export component AurixCommandCenter inherits Window {
                         border-width: 1px; border-color: #334155; background: #0f172a;
                         HorizontalLayout {
                             alignment: center; spacing: 6px;
-                            Text { text: "💾"; font-size: 11px; vertical-alignment: center; }
+                            Text { text: "⛁"; color: #38bdf8; font-size: 11px; vertical-alignment: center; }
                             Text { text: "CHECKPOINTS"; color: #cbd5e1; font-size: 8.5px; font-weight: 700; vertical-alignment: center; }
                         }
                         TouchArea { clicked => { root.open-checkpoint-browser(); } }
@@ -428,7 +429,7 @@ export component AurixCommandCenter inherits Window {
                         border-width: 1px; border-color: #38bdf844; background: #38bdf810;
                         HorizontalLayout {
                             alignment: center; spacing: 6px;
-                            Text { text: "👤"; color: #38bdf8; font-size: 11px; vertical-alignment: center; }
+                            Text { text: "●"; color: #10b981; font-size: 8px; vertical-alignment: center; }
                             Text { text: "OPERATOR"; color: #f1f5f9; font-size: 9px; font-weight: 700; vertical-alignment: center; }
                         }
                     }
@@ -451,7 +452,7 @@ export component AurixCommandCenter inherits Window {
 
                 MetricTile {
                     horizontal-stretch: 1;
-                    tile-icon: "⌁";
+                    tile-icon: "●";
                     label: "CPU UTILIZATION";
                     main-value: root.cpu-display;
                     sub-value: "CORE LOAD NOMINAL";
@@ -461,8 +462,8 @@ export component AurixCommandCenter inherits Window {
 
                 MetricTile {
                     horizontal-stretch: 1;
-                    tile-icon: "⊕";
-                    label: "HOST RAM (12 GB CEILING)";
+                    tile-icon: "●";
+                    label: "HOST RAM (14.5 GB CEILING)";
                     main-value: root.ram-display;
                     sub-value: "ACTIVE MEMORY LOAD";
                     amount: root.ram-usage;
@@ -471,8 +472,8 @@ export component AurixCommandCenter inherits Window {
 
                 MetricTile {
                     horizontal-stretch: 1;
-                    tile-icon: "⚡";
-                    label: "GPU VRAM (6 GB CEILING)";
+                    tile-icon: "●";
+                    label: "GPU VRAM (7.0 GB CEILING)";
                     main-value: root.vram-display;
                     sub-value: "RTX 4060 NF4 QUANT";
                     amount: root.vram-usage;
@@ -481,7 +482,7 @@ export component AurixCommandCenter inherits Window {
 
                 MetricTile {
                     horizontal-stretch: 1;
-                    tile-icon: "🌡";
+                    tile-icon: "●";
                     label: "GPU TEMPERATURE";
                     main-value: root.system-temp;
                     sub-value: "THERMAL LIMIT: 82°C";
@@ -593,7 +594,7 @@ export component AurixCommandCenter inherits Window {
                             height: 24px;
                             HorizontalLayout {
                                 spacing: 8px; alignment: center;
-                                Text { text: "💬"; font-size: 13px; vertical-alignment: center; }
+                                Text { text: "▶"; color: #38bdf8; font-size: 11px; vertical-alignment: center; }
                                 Text {
                                     text: "LUNA INTELLIGENCE CONSOLE";
                                     color: #f1f5f9; font-size: 10px; font-weight: 800; letter-spacing: 0.6px;
@@ -644,8 +645,9 @@ export component AurixCommandCenter inherits Window {
                                         background: msg.sender == "USER" ? #38bdf818 : #0f172a;
                                         vertical-stretch: 0;
                                         Text {
-                                            text: msg.sender == "USER" ? "👤" : "🌙";
-                                            font-size: 11px;
+                                            text: msg.sender == "USER" ? "U" : "L";
+                                            font-size: 11px; font-weight: 800;
+                                            color: msg.sender == "USER" ? #38bdf8 : #34d399;
                                             horizontal-alignment: center; vertical-alignment: center;
                                         }
                                     }
@@ -702,13 +704,47 @@ export component AurixCommandCenter inherits Window {
                                     }
                                 }
 
+                                // Voice / Mic Button
                                 Rectangle {
-                                    width: 34px; height: 34px; border-radius: 6px;
+                                    width: 54px; height: 34px; border-radius: 6px;
+                                    border-width: 1px;
+                                    border-color: root.microphone-active ? #10b981 : #334155;
+                                    background: root.microphone-active ? #10b98122 : #1e293b66;
+                                    y: (parent.height - self.height) / 2;
+                                    HorizontalLayout {
+                                        alignment: center; spacing: 4px;
+                                        Rectangle {
+                                            width: 6px; height: 6px; border-radius: 3px;
+                                            background: root.microphone-active ? #10b981 : #64748b;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+                                        Text {
+                                            text: "VOICE";
+                                            color: root.microphone-active ? #10b981 : #94a3b8;
+                                            font-size: 8.5px; font-weight: 800;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    TouchArea {
+                                        clicked => {
+                                            root.trigger-voice();
+                                        }
+                                    }
+                                }
+
+                                // Send Button
+                                Rectangle {
+                                    width: 48px; height: 34px; border-radius: 6px;
                                     background: #0284c7;
                                     y: (parent.height - self.height) / 2;
-                                    Text {
-                                        text: "➤"; color: #ffffff; font-size: 12px;
-                                        horizontal-alignment: center; vertical-alignment: center;
+                                    HorizontalLayout {
+                                        alignment: center; spacing: 4px;
+                                        Text {
+                                            text: "SEND";
+                                            color: #ffffff;
+                                            font-size: 9px; font-weight: 800;
+                                            vertical-alignment: center;
+                                        }
                                     }
                                     TouchArea {
                                         clicked => {
@@ -764,7 +800,7 @@ export component AurixCommandCenter inherits Window {
                 padding: 18px; spacing: 12px;
 
                 HorizontalLayout {
-                    Text { text: "💾 LUNA Checkpoint Browser"; color: #ffffff; font-size: 13px; font-weight: 800; }
+                    Text { text: "⛁ LUNA Checkpoint Browser"; color: #ffffff; font-size: 13px; font-weight: 800; }
                     Rectangle { horizontal-stretch: 1; }
                     Rectangle {
                         width: 24px; height: 24px; border-radius: 12px; background: #1e293b;

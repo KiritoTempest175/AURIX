@@ -107,6 +107,8 @@
         "checkpoint_dir": { "type": "string" },
         "auto_start_training_on_boot": { "type": "boolean" },
         "max_retained_checkpoints": { "type": "integer", "minimum": 1 },
+        "live_interaction_weight": { "type": "number", "minimum": 0.0, "maximum": 1.0, "description": "Share of student model training dedicated to real user interaction traces (v0.4.1 default: 0.3)" },
+        "synthetic_general_weight": { "type": "number", "minimum": 0.0, "maximum": 1.0, "description": "Share of student model training dedicated to general-purpose synthetic data (v0.4.1 default: 0.7)" },
         "experience_replay_ratio": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
         "eval_frequency_steps": { "type": "integer" },
         "dataset_version": { "type": "string" },

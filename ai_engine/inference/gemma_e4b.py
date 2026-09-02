@@ -35,9 +35,9 @@ except ImportError:
 
 
 class GemmaModelRunner:
-    """Orchestrates Gemma 3n E4B model loading, parameter scaling, and inference."""
+    """Orchestrates Gemma 4 E4B model loading, parameter scaling, and inference."""
 
-    DEFAULT_MODEL = "google/gemma-3n-e4b"
+    DEFAULT_MODEL = "google/gemma-4-E4B-it"
 
     def __init__(
         self,
@@ -95,7 +95,7 @@ class GemmaModelRunner:
                 )
                 FastLanguageModel.for_inference(self.model)
             else:
-                logger.info(f"Checking Gemma 3n weights '{self.model_name}' via HuggingFace Transformers (device={self.device})...")
+                logger.info(f"Checking Gemma weights '{self.model_name}' via HuggingFace Transformers (device={self.device})...")
                 self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
                 quant_config = None
                 if self.load_in_4bit and self.device == "cuda" and BitsAndBytesConfig:
@@ -104,14 +104,18 @@ class GemmaModelRunner:
                         bnb_4bit_quant_type=self.quantization,
                         bnb_4bit_compute_dtype=torch.float16,
                     )
+                model_dtype = torch.float16 if self.device == "cuda" else (
+                    torch.bfloat16 if hasattr(torch, "bfloat16") else torch.float32
+                )
                 self.model = AutoModelForCausalLM.from_pretrained(
                     self.model_name,
                     quantization_config=quant_config,
                     device_map="auto" if self.device == "cuda" else None,
-                    torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+                    torch_dtype=model_dtype,
+                    low_cpu_mem_usage=True,
                 )
             self.is_loaded = True
-            logger.info("Gemma 3n E4B successfully loaded for inference.")
+            logger.info("Gemma E4B successfully loaded for inference.")
         except Exception as e:
             logger.info(f"Local weights not found or offline ({e}). Operating in deterministic reasoning mode.")
             self.is_loaded = True
@@ -183,7 +187,7 @@ class GemmaModelRunner:
         top_p: float = 0.9,
     ) -> str:
         """Generate response given a formatted prompt."""
-        if not self.model or not self.tokenizer or not torch or not torch.cuda.is_available():
+        if not self.model or not self.tokenizer or not torch:
             return self._fallback_generate(prompt)
 
         try:
@@ -233,7 +237,7 @@ if __name__ == "__main__":
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    print("[LUNA] Initializing Gemma 3n E4B Runner...")
+    print("[LUNA] Initializing Gemma 4 E4B Runner...")
     runner = get_default_gemma_runner()
     
     test_queries = [

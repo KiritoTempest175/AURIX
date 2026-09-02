@@ -39,6 +39,18 @@ from tests.python.test_data_pipeline import (
     test_self_healing_max_retries_ceiling,
     get_temp_db_path,
 )
+from tests.python.test_synthetic_generator import (
+    test_training_weights_loaded_from_config,
+    test_synthetic_general_source_tagging,
+    test_synthetic_general_zero_project_file_reads,
+    test_fail_closed_governor_gating,
+    test_live_generation_path_with_mock_gemma_runner,
+    test_live_generation_fallback_on_model_exception,
+    test_replay_buffer_weights_from_config,
+    test_replay_buffer_sampling_rebalance,
+    test_dynamic_loader_supports_synthetic_general,
+    test_student_controller_wires_synthetic_generator_and_power_query,
+)
 
 
 class LunaTestSuite(unittest.TestCase):
@@ -74,6 +86,18 @@ class LunaTestSuite(unittest.TestCase):
             test_telemetry_ingestion_and_secret_scrubbing(db_file)
             test_self_healing_traceback_parser()
             test_self_healing_max_retries_ceiling()
+
+    def test_synthetic_generator_suite(self):
+        test_training_weights_loaded_from_config()
+        test_synthetic_general_source_tagging()
+        test_synthetic_general_zero_project_file_reads()
+        test_fail_closed_governor_gating()
+        test_live_generation_path_with_mock_gemma_runner()
+        test_live_generation_fallback_on_model_exception()
+        test_replay_buffer_weights_from_config()
+        test_replay_buffer_sampling_rebalance()
+        test_dynamic_loader_supports_synthetic_general()
+        test_student_controller_wires_synthetic_generator_and_power_query()
 
 
 if __name__ == "__main__":

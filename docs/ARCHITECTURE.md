@@ -3,8 +3,8 @@
 ## 1. Overview & Vision
 **LUNA (Autonomous Universal Reasoning & Interaction Executive v2.0)** is an edge-governed, air-gapped, voice-and-text-activated desktop AI executive. Operating as a personal JARVIS on the user's PC, LUNA features:
 - **Dual-Model Paradigm:**
-  1. **Gemma 3n E4B:** Primary reasoning and tool-use foundation model loaded in 4-bit NF4 with elastic E2B/E4B execution.
-  2. **Luna-Student-5B:** Continuous personal student model trained via QLoRA on live user interaction traces.
+  1. **Gemma 4 / 3n E4B:** Primary reasoning and live assistant foundation model loaded in 4-bit NF4 with elastic E2B/E4B execution. Also serves as the on-device source of general-purpose training data during idle periods.
+  2. **Luna-Student-5B:** Continuous student model trained via QLoRA on a balanced blend of general-purpose synthetic distillation (70%) and live user interaction traces (30%).
 - **Adaptive Power/Resource Governor v2:** Idle-aware state engine monitoring user input, session locks, host RAM, GPU VRAM, and thermals.
 - **Secure Checkpointing & Hibernation:** Atomic, encrypted checkpoint persistence (AES-256-GCM) with 3-version rollback.
 - **Offline Wake-Word Engine:** Spoken keyword activation ("Luna") with confirmation echo protection.
@@ -29,11 +29,21 @@
                                      | (Zero-Cost Atomic Memory)
 +------------------------------------v------------------------------------+
 |                      AI ENGINE & DATA PIPELINE                          |
-|  Gemma 3n E4B Inference Engine  |  Luna-Student-5B QLoRA Training Loop  |
+|  Gemma E4B Inference Engine      |  Luna-Student-5B QLoRA Training Loop  |
+|  General Synthetic Generator     |  Experience Replay Buffer (70/30)    |
 |  CheckpointManager (AES-256-GCM)|  Secret Scrubber Redaction Engine     |
 |  SQLite WAL Telemetry Log       |  DuckDB Analytical Query Engine       |
 +-------------------------------------------------------------------------+
 ```
+
+### 2.3 Idle-Time Synthetic Data Generation (v0.4.1 — General Usefulness)
+During **IDLE** or **LOCKED** states (never during ACTIVE):
+- **Teacher Dual Role:** Gemma acts as both the live assistant and the source of general-purpose training data; the student model is expected to be broadly competent across systems and software engineering, with the user's own real interactions contributing a smaller personalization layer on top.
+- **Curriculum & Zero File Reads:** General-purpose synthetic examples (`source = "synthetic_general"`) are generated purely in-memory across core engineering domains (algorithms, diagnostics, system operations, technical QA, and instruction following). **The general generation pipeline never accesses the user's private project files, command histories, or file jail.**
+- **Rebalanced Weights:**
+  - `live_interaction_weight = 0.3` (30% share: genuine real usage signal)
+  - `synthetic_general_weight = 0.7` (70% share: foundational broad competence)
+  - Configured in `config/luna.toml` and dynamically read by `ExperienceReplayBuffer`.
 
 ---
 

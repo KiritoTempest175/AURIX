@@ -35,10 +35,10 @@ require_trust_token_for_checkpoint_restore = true
 
 [resources]
 # Static / baseline ceilings
-max_ram_gb = 12.0               # Baseline host RAM ceiling
-max_vram_gb = 6.0               # Baseline discrete GPU VRAM ceiling (Active mode)
-absolute_max_ram_gb = 14.0      # Hard emergency ceiling (never exceeded even at idle)
-absolute_max_vram_gb = 7.2      # Hard emergency VRAM ceiling (leave ~0.8 GB headroom for OS)
+max_ram_gb = 14.5               # Baseline host RAM ceiling (User has 16GB RAM)
+max_vram_gb = 7.0               # Baseline discrete GPU VRAM ceiling (Active mode)
+absolute_max_ram_gb = 15.5      # Hard emergency ceiling (never exceeded even at idle)
+absolute_max_vram_gb = 7.8      # Hard emergency VRAM ceiling
 cpu_throttle_percent = 85.0     # CPU usage throttle trigger
 poll_interval_ms = 1000         # Governor watchdog polling cadence
 suspend_on_overload = true
@@ -47,10 +47,10 @@ thermal_throttle_celsius = 82.0 # GPU core temperature ceiling
 [power_governor]
 # Adaptive idle-aware governor settings
 idle_threshold_seconds = 300    # 5 minutes of no keyboard/mouse input triggers IDLE state
-active_max_vram_gb = 6.0        # VRAM ceiling when user is actively working
-idle_max_vram_gb = 7.0          # VRAM ceiling when machine is idle
-active_max_ram_gb = 12.0        # RAM ceiling when active
-idle_max_ram_gb = 13.5          # RAM ceiling when idle
+active_max_vram_gb = 7.0        # VRAM ceiling when user is actively working
+idle_max_vram_gb = 7.5          # VRAM ceiling when machine is idle
+active_max_ram_gb = 14.5        # RAM ceiling when active
+idle_max_ram_gb = 15.2          # RAM ceiling when idle
 active_lora_rank = 16           # Conservative LoRA rank during active usage
 idle_lora_rank = 32             # Deeper LoRA rank during sustained idle/locked state
 auto_hibernate_on_shutdown = true
@@ -72,7 +72,7 @@ audio_sample_rate = 16000
 chunk_size = 1280
 
 [llm]
-model_name = "google/gemma-3n-e4b" # Primary reasoning / JARVIS brain foundation model
+model_name = "google/gemma-4-E4B-it" # Primary reasoning / JARVIS brain foundation model (Google Gemma 4 E4B)
 effective_params = "E4B"          # "E2B" (efficient 2B) or "E4B" (full 4B)
 load_in_4bit = true
 quantization = "nf4"
@@ -83,12 +83,19 @@ top_p = 0.9
 fallback_mode = true
 
 [training]
-# Personal student model configuration (Luna-Student-5B)
+# Gemma 4 E4B acts as both the live assistant and the source of general-purpose training data;
+# the student model is expected to be broadly competent, with the user's own real interactions
+# contributing a smaller personalization layer on top.
 student_base_model = "Qwen/Qwen2.5-5B"
 checkpoint_dir = "checkpoints/luna-student"
 auto_start_training_on_boot = false   # User explicitly presses 'Start Training' in UI
 max_retained_checkpoints = 5          # Keep at least last 3-5 versioned checkpoints for rollback
-experience_replay_ratio = 0.80        # 80% foundational coding knowledge, 20% user telemetry
+
+# v0.4.1 Rebalanced training weights (General Usefulness, Not Personal Overfitting)
+live_interaction_weight = 0.3         # Real usage still matters, but isn't the whole model (30% share)
+synthetic_general_weight = 0.7        # General competence is now the larger base share (70% share)
+experience_replay_ratio = 0.70        # Backward compatibility ratio (reflects 70% general knowledge)
+
 eval_frequency_steps = 25
 dataset_version = "v1.0"
 

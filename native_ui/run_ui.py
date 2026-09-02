@@ -10,6 +10,7 @@ import datetime
 import logging
 import os
 import queue
+import subprocess
 import sys
 import threading
 import time
@@ -143,11 +144,30 @@ class LunaController:
         except Exception as e:
             logger.error(f"Telemetry log failed: {e}")
 
-        # 3. Dispatch Async Inference with Gemma 3n E4B
+        # 3. Dispatch Async Execution / Inference
         def generate_job():
             try:
-                formatted_prompt = self.gemma_runner.format_chat_prompt(user_message=text)
-                reply = self.gemma_runner.generate_response(formatted_prompt)
+                trimmed = text.strip()
+                lower = trimmed.lower()
+                if lower in ("notepad", "open notepad"):
+                    subprocess.Popen("notepad.exe")
+                    reply = "Launched Windows Notepad."
+                elif lower in ("calc", "calculator", "open calc"):
+                    subprocess.Popen("calc.exe")
+                    reply = "Launched Windows Calculator."
+                elif lower in ("explorer", "open explorer"):
+                    subprocess.Popen(["explorer.exe", "."])
+                    reply = "Opened File Explorer at current directory."
+                elif lower.startswith("cmd:") or lower.startswith("run:"):
+                    raw_cmd = trimmed.split(":", 1)[1].strip()
+                    res = subprocess.run(raw_cmd, shell=True, capture_output=True, text=True, errors="replace")
+                    out = (res.stdout or res.stderr or "Command executed successfully (exit code 0).").strip()
+                    reply = f"[Command Result (Exit {res.returncode})]:\n{out}"
+                elif lower in ("luna", "hey luna", "aurix", "wake up", "call luna", "hello"):
+                    reply = "LUNA Executive online and listening. Ready for your command."
+                else:
+                    formatted_prompt = self.gemma_runner.format_chat_prompt(user_message=text)
+                    reply = self.gemma_runner.generate_response(formatted_prompt)
             except Exception as err:
                 reply = f"[Error]: {err}"
             self.response_queue.put((reply, self._get_time_str()))

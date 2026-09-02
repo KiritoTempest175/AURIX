@@ -1,8 +1,12 @@
-"""LUNA Student-5B Continuous QLoRA Training Engine.
+"""LUNA Student-5B Continuous QLoRA Training Engine (v0.4.1).
 
-Trains a personal ~5B student model on the user's real interaction logs and telemetry
-using 4-bit NF4 QLoRA, paged 8-bit optimizer states, rank auto-scaling, experience replay,
-and adaptive power-state governor awareness.
+Gemma 4 E4B acts as both the live assistant and the source of general-purpose training data;
+the student model is expected to be broadly competent, with the user's own real interactions
+contributing a smaller personalization layer on top.
+
+Trains the student model using a balanced mix of general-purpose synthetic distillation (70%)
+and live user interaction traces (30%) via 4-bit NF4 QLoRA, paged 8-bit optimizer states,
+rank auto-scaling, experience replay, and adaptive power-state governor awareness.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from ai_engine.training.checkpoint_manager import (
     CheckpointManifest,
     get_default_checkpoint_manager,
 )
+from ai_engine.training.synthetic_generator import GeneralSyntheticDataGenerator
 
 logger = logging.getLogger("luna.ai_engine.student_training")
 
@@ -122,11 +127,33 @@ class StudentTrainingController:
         checkpoint_dir: str = "checkpoints/luna-student",
         active_lora_rank: int = 16,
         idle_lora_rank: int = 32,
+        live_interaction_weight: float = 0.3,
+        synthetic_general_weight: float = 0.7,
+        get_power_state_fn: Optional[Callable[[], int]] = None,
+        synthetic_generator: Optional[GeneralSyntheticDataGenerator] = None,
     ) -> None:
         self.base_model_name = base_model_name
         self.checkpoint_dir = checkpoint_dir
         self.active_lora_rank = active_lora_rank
         self.idle_lora_rank = idle_lora_rank
+        self.live_interaction_weight = live_interaction_weight
+        self.synthetic_general_weight = synthetic_general_weight
+
+        # Governor power state query (queries live SystemState, fails closed to 0/ACTIVE if unavailable)
+        if get_power_state_fn is not None:
+            self.get_power_state_fn = get_power_state_fn
+        else:
+            def _default_power_query() -> int:
+                try:
+                    from core_engine import SystemState
+                    return SystemState().get_power_state()
+                except Exception:
+                    return 0  # ACTIVE (fail closed)
+            self.get_power_state_fn = _default_power_query
+
+        self.synthetic_generator = synthetic_generator or GeneralSyntheticDataGenerator(
+            get_power_state_fn=self.get_power_state_fn
+        )
 
         self.checkpoint_manager = CheckpointManager(checkpoint_dir=checkpoint_dir)
         self._is_training_running = False
@@ -219,6 +246,8 @@ class StudentTrainingController:
             "current_loss": self.current_loss,
             "checkpoint_dir": str(self.checkpoint_dir),
             "model_name": self.base_model_name,
+            "live_interaction_weight": self.live_interaction_weight,
+            "synthetic_general_weight": self.synthetic_general_weight,
         }
 
     def _run_training_worker(self) -> None:
@@ -245,6 +274,17 @@ class StudentTrainingController:
             step += 1
             self.current_step = step
             self.current_loss = max(0.12, 1.85 - (step * 0.01))
+
+            # Query live governor state dynamically (fail-closed: generate only if confirmed IDLE or LOCKED)
+            live_power_state = self.get_power_state_fn()
+            if live_power_state in (1, 2):
+                logger.info(
+                    f"Governor confirmed idle state ({live_power_state}): triggering idle general synthetic generation."
+                )
+                try:
+                    self.synthetic_generator.generate_batch(count=1, power_state=live_power_state, persist=True)
+                except Exception as e:
+                    logger.warning(f"Background idle synthetic generation encountered issue: {e}")
 
             # Simulate periodic checkpoint persistence every 25 steps
             if step % 25 == 0:

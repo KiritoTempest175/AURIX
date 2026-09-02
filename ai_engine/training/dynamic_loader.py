@@ -14,6 +14,7 @@
 
 import json
 import os
+from typing import List, Optional, Union
 from torch.utils.data import IterableDataset
 
 
@@ -59,64 +60,56 @@ class DynamicTelemetryDataset(IterableDataset):
 
     def __init__(
         self,
-        data_path: str = "./data_pipeline/storage/telemetry.jsonl",
-        max_samples: int = None,
+        data_path: Union[str, List[str]] = "./data_pipeline/storage/telemetry.jsonl",
+        max_samples: Optional[int] = None,
     ):
         super().__init__()
-        self.data_path = data_path
+        self.data_paths = [data_path] if isinstance(data_path, str) else list(data_path)
         self.max_samples = max_samples
 
-        # Validate that the data file exists at init time rather than
-        # failing silently during iteration.
-        if not os.path.exists(self.data_path):
+        # Validate that at least one data file exists at init time
+        any_found = any(os.path.exists(p) for p in self.data_paths)
+        if not any_found:
             print(
-                f"⚠️  [DynamicTelemetryDataset] Data file not found: "
-                f"{self.data_path} — dataset will yield 0 samples."
+                f"⚠️  [DynamicTelemetryDataset] Data file(s) not found: "
+                f"{self.data_paths} — dataset will yield 0 samples."
             )
 
     def __iter__(self):
-        """Lazily stream samples from the JSONL file, one line at a time.
-
-        This generator:
-          1. Opens the JSONL file in text mode.
-          2. Reads one line at a time (O(1) RAM per line).
-          3. Parses the JSON and formats it into a prompt string.
-          4. Yields a dict with a "text" key (SFTTrainer convention).
-
-        If the file doesn't exist, the generator produces zero items
-        (the SFTTrainer will log a warning about an empty dataset).
+        """Lazily stream samples from the JSONL file(s), one line at a time.
 
         Yields:
-            dict: {"text": str} where str is the formatted prompt.
+            dict: {"text": str, "source": str}
         """
-        if not os.path.exists(self.data_path):
-            return
-
         count = 0
-        with open(self.data_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue  # Skip blank lines
+        for path in self.data_paths:
+            if not os.path.exists(path):
+                continue
 
-                try:
-                    raw_sample = json.loads(line)
-                except json.JSONDecodeError:
-                    # Skip malformed lines — log for telemetry debugging.
-                    print(
-                        f"⚠️  [DynamicTelemetryDataset] Skipping malformed "
-                        f"JSON line: {line[:80]}..."
-                    )
-                    continue
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue  # Skip blank lines
 
-                # Format the raw sample into a prompt string.
-                formatted = self.parse_sample(raw_sample)
-                if formatted is not None:
-                    yield {"text": formatted}
-                    count += 1
+                    try:
+                        raw_sample = json.loads(line)
+                    except json.JSONDecodeError:
+                        print(
+                            f"⚠️  [DynamicTelemetryDataset] Skipping malformed "
+                            f"JSON line: {line[:80]}..."
+                        )
+                        continue
 
-                    if self.max_samples is not None and count >= self.max_samples:
-                        return
+                    # Format the raw sample into a prompt string.
+                    formatted = self.parse_sample(raw_sample)
+                    if formatted is not None:
+                        source = raw_sample.get("source", "synthetic_general" if "synthetic" in path else "live_interaction")
+                        yield {"text": formatted, "source": source}
+                        count += 1
+
+                        if self.max_samples is not None and count >= self.max_samples:
+                            return
 
     @staticmethod
     def parse_sample(raw: dict) -> str:
