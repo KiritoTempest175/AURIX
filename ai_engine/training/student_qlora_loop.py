@@ -123,7 +123,7 @@ class StudentTrainingController:
 
     def __init__(
         self,
-        base_model_name: str = "Qwen/Qwen2.5-5B",
+        base_model_name: str = "google/gemma-4-E4B-it",
         checkpoint_dir: str = "checkpoints/luna-student",
         active_lora_rank: int = 16,
         idle_lora_rank: int = 32,

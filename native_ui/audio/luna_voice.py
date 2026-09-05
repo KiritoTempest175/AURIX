@@ -22,6 +22,19 @@ from typing import Callable, Optional
 
 import numpy as np
 
+def _ensure_sounddevice() -> bool:
+    global sd, HAS_SOUNDDEVICE
+    if not HAS_SOUNDDEVICE:
+        try:
+            import sounddevice as _sd
+            sd = _sd
+            HAS_SOUNDDEVICE = True
+        except ImportError:
+            sd = None
+            HAS_SOUNDDEVICE = False
+    return HAS_SOUNDDEVICE
+
+
 try:
     import sounddevice as sd
     HAS_SOUNDDEVICE = True
@@ -36,6 +49,20 @@ try:
 except ImportError:
     import wave
     HAS_SCIPY = False
+
+
+def _ensure_piper_voice() -> bool:
+    global PiperVoice, HAS_PIPER_VOICE
+    if not HAS_PIPER_VOICE:
+        try:
+            from piper.voice import PiperVoice as _PV
+            PiperVoice = _PV
+            HAS_PIPER_VOICE = True
+        except ImportError:
+            PiperVoice = None
+            HAS_PIPER_VOICE = False
+    return HAS_PIPER_VOICE
+
 
 try:
     from piper.voice import PiperVoice
@@ -104,7 +131,7 @@ def get_female_voice_model() -> tuple[Optional[Path], Optional[Path]]:
 def get_voice():
     """Lazy-load and cache the PiperVoice instance in memory for zero-lag synthesis."""
     global _voice_instance, _voice_model_path
-    if not HAS_PIPER_VOICE:
+    if not _ensure_piper_voice():
         return None
 
     with _lock:
@@ -158,7 +185,7 @@ def record_audio(
     - When user stops speaking and `silence_limit` seconds of silence is observed, stops and saves.
     - If user did not speak at all within timeout, returns None.
     """
-    if not HAS_SOUNDDEVICE:
+    if not _ensure_sounddevice():
         logger.warning("sounddevice is not installed. Run: pip install sounddevice")
         return None
 
@@ -320,7 +347,7 @@ def speak(
         return False
 
     voice = get_voice()
-    if voice is not None and HAS_SOUNDDEVICE:
+    if voice is not None and _ensure_sounddevice():
         try:
 
             audio_chunks = []

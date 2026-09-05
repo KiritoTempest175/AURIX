@@ -225,8 +225,8 @@ pub struct LlmConfig {
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
-            model_name: "unsloth/Qwen3-4B".to_string(),
-            model_alias: "Qwen 3 4B".to_string(),
+            model_name: "google/gemma-4-E4B-it".to_string(),
+            model_alias: "Gemma 3n E4B".to_string(),
             max_seq_length: 2048,
             load_in_4bit: true,
             quantization: "nf4".to_string(),

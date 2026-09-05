@@ -1,5 +1,6 @@
 # Resolve cargo from PATH or well-known install locations
-$cargoCmd = (Get-Command cargo -ErrorAction SilentlyContinue)?.Source
+$cmd = Get-Command cargo -ErrorAction SilentlyContinue
+$cargoCmd = if ($cmd) { $cmd.Source } else { $null }
 if (-not $cargoCmd) {
     # Common locations: USERPROFILE\.cargo\bin or well-known rustup paths
     $candidates = @(

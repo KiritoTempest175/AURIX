@@ -30,7 +30,6 @@ import psutil
 import slint
 
 from ai_engine.inference.gemma_e4b import get_default_gemma_runner
-from ai_engine.inference.qwen3b_ollama import get_default_qwen_runner
 from ai_engine.training.checkpoint_manager import get_default_checkpoint_manager
 from ai_engine.training.student_qlora_loop import get_default_student_trainer
 from data_pipeline.storage.telemetry_daemon import get_default_telemetry_daemon
@@ -74,17 +73,22 @@ class LunaController:
         self._voice_input_queue: queue.Queue[str] = queue.Queue()
 
         # 1. Initialize Subsystems
-        # Primary: Qwen 2.5 3B via local Ollama (qwen2.5:3b-instruct)
-        logger.info("Initializing Qwen 2.5 3B Ollama Runner (primary)...")
-        self.qwen_runner = get_default_qwen_runner()
-        if self.qwen_runner.is_available:
-            logger.info("Qwen 2.5 3B ready via Ollama at %s", self.qwen_runner.host)
-        else:
-            logger.warning("Qwen 3B unavailable — start Ollama with: ollama serve")
-
-        # Fallback: Gemma 3n E4B (HuggingFace / Unsloth)
-        logger.info("Initializing Gemma 3n E4B Inference Engine (fallback)...")
+        # Primary: Gemma 3n E4B Foundation Model (HuggingFace / Unsloth / Local)
+        logger.info("Initializing Gemma 3n E4B Inference Engine (primary)...")
         self.gemma_runner = get_default_gemma_runner()
+        if getattr(self.gemma_runner, "has_weights", False):
+            logger.info(
+                "✅ Gemma 4 E4B live neural model loaded from local weights (device: %s, params: %s).",
+                self.gemma_runner.device,
+                self.gemma_runner.effective_params,
+            )
+        elif getattr(self.gemma_runner, "is_available", False):
+            logger.info(
+                "Gemma 3n E4B engine ready in deterministic mode (device: %s, params: %s).",
+                self.gemma_runner.device,
+                self.gemma_runner.effective_params,
+            )
+
 
         logger.info("Initializing Student-5B Training Controller...")
         self.student_trainer = get_default_student_trainer()
@@ -199,20 +203,17 @@ class LunaController:
                 elif lower in ("luna", "hey luna", "aurix", "wake up", "call luna", "hello"):
                     reply = "LUNA Executive online and listening. Ready for your command."
                 else:
-                    # Primary: Qwen 2.5 3B via Ollama
-                    if self.qwen_runner.is_available:
-                        prompt = self.qwen_runner.format_chat_prompt(user_message=text)
-                        reply = self.qwen_runner.generate_response(prompt)
-                    else:
-                        # Fallback: Gemma 3n E4B
-                        logger.debug("Qwen unavailable, falling back to Gemma runner.")
+                    # Primary: Gemma 3n E4B Foundation Engine
+                    if getattr(self.gemma_runner, "is_available", self.gemma_runner.is_loaded):
                         prompt = self.gemma_runner.format_chat_prompt(user_message=text)
                         reply = self.gemma_runner.generate_response(prompt)
+                    else:
+                        reply = "LUNA inference engine is standing by."
             except Exception as err:
                 reply = f"[Error]: {err}"
             self.response_queue.put((reply, self._get_time_str()))
 
-        threading.Thread(target=generate_job, daemon=True, name="QwenInferenceThread").start()
+        threading.Thread(target=generate_job, daemon=True, name="GemmaInferenceThread").start()
 
     def _poll_response_queue(self) -> None:
         """Polls queue for async AI response and appends to Slint UI model.
@@ -270,7 +271,7 @@ class LunaController:
         State 1: SLEEPING  -> Background wake-word listening
         State 2: LISTENING -> Wake ack ('Yes?') + Dynamic mic recording
         State 3: THINKING  -> STT transcription + Cancel phrase detection
-        State 4: EXECUTING -> Dispatched to Qwen/Gemma AI brain or tool runner
+        State 4: EXECUTING -> Dispatched to Gemma AI brain or tool runner
         State 5: SPEAKING  -> TTS speech synthesis -> Return to State 1 (SLEEPING)
         """
         # Avoid overlapping runs if assistant is already actively listening/processing
@@ -435,8 +436,9 @@ class LunaController:
             "time": self._get_time_str(),
         }
         self.app.messages = slint.ListModel([welcome])
-        # Reset Qwen rolling context so next conversation starts fresh
-        self.qwen_runner.clear_history()
+        # Reset rolling conversation context so next conversation starts fresh
+        if hasattr(self.gemma_runner, "clear_history"):
+            self.gemma_runner.clear_history()
         self.app.toast_message = "Conversation history cleared."
         self.app.toast_visible = True
 

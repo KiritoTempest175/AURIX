@@ -34,6 +34,43 @@ except ImportError:
     UNSLOTH_AVAILABLE = False
 
 
+def resolve_model_path(model_name_or_id: str) -> Optional[str]:
+    """Resolve local path for model weights from direct path, HF cache, or models directory."""
+    if not model_name_or_id:
+        return None
+    # 1. Direct path exists
+    if os.path.exists(model_name_or_id):
+        return os.path.abspath(model_name_or_id)
+
+    # 2. Check HuggingFace Hub cache (~/.cache/huggingface/hub/models--...)
+    try:
+        from pathlib import Path
+        clean_name = model_name_or_id.replace("/", "--")
+        cache_dir = Path.home() / ".cache" / "huggingface" / "hub" / f"models--{clean_name}"
+        if cache_dir.exists():
+            snapshots_dir = cache_dir / "snapshots"
+            if snapshots_dir.exists():
+                snapshots = [p for p in snapshots_dir.iterdir() if p.is_dir()]
+                if snapshots:
+                    # Pick latest snapshot by modification time
+                    latest = max(snapshots, key=lambda p: p.stat().st_mtime)
+                    if any(latest.glob("*.safetensors")) or any(latest.glob("*.bin")):
+                        return str(latest)
+    except Exception as exc:
+        logger.debug("Error resolving HuggingFace cache for '%s': %s", model_name_or_id, exc)
+
+    # 3. Check models directory in project
+    try:
+        from pathlib import Path
+        candidate = Path(__file__).resolve().parent.parent.parent / "models" / model_name_or_id
+        if candidate.exists():
+            return str(candidate)
+    except Exception:
+        pass
+
+    return None
+
+
 class GemmaModelRunner:
     """Orchestrates Gemma 4 E4B model loading, parameter scaling, and inference."""
 
@@ -48,6 +85,7 @@ class GemmaModelRunner:
         quantization: str = "nf4",
         device: str = "cuda",
         fallback_mode: bool = True,
+        force_fallback: bool = False,
     ) -> None:
         """Initialize Gemma 3n model runner.
 
@@ -59,6 +97,7 @@ class GemmaModelRunner:
             quantization: Quantization format ("nf4", "fp4").
             device: Target device ("cuda", "cpu").
             fallback_mode: If True, operates in simulation mode if GPU/weights unavailable.
+            force_fallback: If True, skips loading weights and forces deterministic reasoning mode.
         """
         self.model_name = model_name
         self.effective_params = effective_params.upper()
@@ -67,50 +106,74 @@ class GemmaModelRunner:
         self.quantization = quantization
         self.device = device if (torch and torch.cuda.is_available()) else "cpu"
         self.fallback_mode = fallback_mode
+        self.force_fallback = force_fallback
 
         self.model: Optional[Any] = None
         self.tokenizer: Optional[Any] = None
         self.is_loaded: bool = False
+        self._history: List[Dict[str, str]] = []
 
         self._initialize_model()
 
+    @property
+    def is_available(self) -> bool:
+        """Return True if Gemma runner is loaded or ready for inference."""
+        return self.is_loaded
+
+    @property
+    def has_weights(self) -> bool:
+        """Return True if real model weights and tokenizer are loaded in memory."""
+        return self.model is not None and self.tokenizer is not None
+
+    def clear_history(self) -> None:
+        """Reset the rolling conversation context."""
+        self._history.clear()
+        logger.debug("GemmaModelRunner: conversation history cleared.")
+
     def _initialize_model(self) -> None:
-        """Load Gemma 3n model weights or initialize offline fallback."""
+        """Load Gemma 3n / 4 E4B model weights or initialize offline fallback."""
         if not TORCH_AVAILABLE:
             logger.info("PyTorch / Transformers not installed. Operating in offline fallback mode.")
             self.is_loaded = True
             return
 
-        if self.fallback_mode and not os.path.exists(self.model_name):
+        if self.force_fallback:
             self.is_loaded = True
-            logger.info("Local Gemma weights not present. Operating in deterministic offline fallback mode.")
+            logger.info("Forced fallback mode active. Operating in deterministic offline mode.")
             return
+
+        resolved_path = resolve_model_path(self.model_name)
+        if not resolved_path:
+            if self.fallback_mode:
+                self.is_loaded = True
+                logger.info(
+                    "Local Gemma weights for '%s' not present in cache. Operating in deterministic offline fallback mode.",
+                    self.model_name,
+                )
+                return
+            target_path = self.model_name
+            local_only = False
+        else:
+            target_path = resolved_path
+            local_only = True
+            logger.info("Found local Gemma weights at '%s'. Initializing model...", target_path)
 
         try:
             if UNSLOTH_AVAILABLE and self.device == "cuda":
                 logger.info(
-                    f"Loading Gemma 3n ({self.effective_params}) with Unsloth from '{self.model_name}' "
+                    f"Loading Gemma 3n ({self.effective_params}) with Unsloth from '{target_path}' "
                     f"in 4-bit {self.quantization.upper()}..."
                 )
                 self.model, self.tokenizer = FastLanguageModel.from_pretrained(
-                    model_name=self.model_name,
+                    model_name=target_path,
                     max_seq_length=self.max_seq_length,
                     load_in_4bit=self.load_in_4bit,
                     fast_inference=True,
                 )
                 FastLanguageModel.for_inference(self.model)
             else:
-                logger.info(f"Checking Gemma weights '{self.model_name}' (device={self.device})...")
-                # Attempt local files first to prevent network timeouts when offline or in test environments
-                local_only = self.fallback_mode and not os.path.exists(self.model_name)
-                try:
-                    self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, local_files_only=local_only)
-                except Exception:
-                    if self.fallback_mode:
-                        self.is_loaded = True
-                        logger.info("Local weights not present. Operating in deterministic offline mode.")
-                        return
-                    raise
+                logger.info("Loading Gemma tokenizer from '%s'...", target_path)
+                self.tokenizer = AutoTokenizer.from_pretrained(target_path, local_files_only=local_only)
 
                 quant_config = None
                 if self.load_in_4bit and self.device == "cuda" and BitsAndBytesConfig:
@@ -122,8 +185,9 @@ class GemmaModelRunner:
                 model_dtype = torch.float16 if self.device == "cuda" else (
                     torch.bfloat16 if hasattr(torch, "bfloat16") else torch.float32
                 )
+                logger.info("Loading Gemma weights on device '%s' (dtype=%s)...", self.device, model_dtype)
                 self.model = AutoModelForCausalLM.from_pretrained(
-                    self.model_name,
+                    target_path,
                     quantization_config=quant_config,
                     device_map="auto" if self.device == "cuda" else None,
                     torch_dtype=model_dtype,
@@ -131,9 +195,9 @@ class GemmaModelRunner:
                     local_files_only=local_only,
                 )
             self.is_loaded = True
-            logger.info("Gemma E4B successfully loaded for inference.")
+            logger.info("Gemma E4B successfully loaded for live inference.")
         except Exception as e:
-            logger.info(f"Local weights not found or offline ({e}). Operating in deterministic reasoning mode.")
+            logger.warning("Failed to load Gemma weights (%s). Operating in deterministic reasoning mode.", e)
             self.is_loaded = True
 
     def set_effective_parameters(self, mode: str) -> None:
@@ -175,10 +239,10 @@ class GemmaModelRunner:
         if extra_context:
             grounded_user_content = f"{chr(10).join(extra_context)}\n\n[User Instruction]: {user_message}"
 
+        effective_history = context_history if context_history is not None else list(self._history)
         messages = [{"role": "system", "content": sys_prompt}]
-        if context_history:
-            for msg in context_history:
-                messages.append(msg)
+        for msg in effective_history:
+            messages.append(msg)
         messages.append({"role": "user", "content": grounded_user_content})
 
         if self.tokenizer and hasattr(self.tokenizer, "apply_chat_template"):
@@ -189,38 +253,51 @@ class GemmaModelRunner:
 
         # Standard fallback template format for Gemma
         formatted = f"<start_of_turn>system\n{sys_prompt}<end_of_turn>\n"
-        if context_history:
-            for msg in context_history:
-                formatted += f"<start_of_turn>{msg['role']}\n{msg['content']}<end_of_turn>\n"
+        for msg in effective_history:
+            formatted += f"<start_of_turn>{msg['role']}\n{msg['content']}<end_of_turn>\n"
         formatted += f"<start_of_turn>user\n{grounded_user_content}<end_of_turn>\n<start_of_turn>model\n"
         return formatted
 
     def generate_response(
         self,
         prompt: str,
-        max_new_tokens: int = 512,
+        max_new_tokens: int = 128,
         temperature: float = 0.7,
         top_p: float = 0.9,
     ) -> str:
         """Generate response given a formatted prompt."""
-        if not self.model or not self.tokenizer or not torch:
-            return self._fallback_generate(prompt)
+        if not self.has_weights or not torch:
+            reply = self._fallback_generate(prompt)
+        else:
+            try:
+                inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+                gen_kwargs = {
+                    "max_new_tokens": max_new_tokens,
+                    "use_cache": True,
+                }
+                if temperature and temperature > 0:
+                    gen_kwargs["do_sample"] = True
+                    gen_kwargs["temperature"] = temperature
+                    gen_kwargs["top_p"] = top_p
+                else:
+                    gen_kwargs["do_sample"] = False
+                if getattr(self.tokenizer, "pad_token_id", None) is not None:
+                    gen_kwargs["pad_token_id"] = self.tokenizer.pad_token_id
+                elif getattr(self.tokenizer, "eos_token_id", None) is not None:
+                    gen_kwargs["pad_token_id"] = self.tokenizer.eos_token_id
 
-        try:
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
-            with torch.inference_mode():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    use_cache=True,
-                )
-            generated_tokens = outputs[0][inputs.input_ids.shape[1] :]
-            return self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
-        except Exception as e:
-            logger.error(f"Inference error: {e}. Yielding fallback response.")
-            return self._fallback_generate(prompt)
+                with torch.inference_mode():
+                    outputs = self.model.generate(**inputs, **gen_kwargs)
+                generated_tokens = outputs[0][inputs.input_ids.shape[1] :]
+                reply = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+            except Exception as e:
+                logger.error(f"Inference error: {e}. Yielding fallback response.")
+                reply = self._fallback_generate(prompt)
+
+        # Update rolling history for multi-turn context
+        self._history.append({"role": "user", "content": prompt})
+        self._history.append({"role": "assistant", "content": reply})
+        return reply
 
     def _fallback_generate(self, prompt: str) -> str:
         """Deterministic offline fallback response generator."""

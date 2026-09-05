@@ -26,7 +26,7 @@ auto_tts_reply = true
 
 [resources]
 # Maximum host RAM ceiling in GB before Governor suspends AI operations (Blueprint ceiling: 12GB)
-max_ram_gb = 12.0
+max_ram_gb = 16.0
 # Maximum discrete GPU VRAM ceiling in GB (Blueprint ceiling: 6GB)
 max_vram_gb = 6.0
 cpu_throttle_percent = 85.0
@@ -40,8 +40,9 @@ log_level = "info"
 log_file = "logs/aurix_session.log"
 
 [llm]
-model_name = "unsloth/Qwen3-4B"
-model_alias = "Qwen 3 4B"
+model_name = "google/gemma-4-E4B-it"
+model_alias = "Gemma 3n E4B"
+effective_params = "E4B"
 max_seq_length = 2048
 load_in_4bit = true
 quantization = "nf4"
@@ -49,10 +50,5 @@ device = "cuda"
 temperature = 0.7
 top_p = 0.9
 
-[qwen_ollama]
-# Primary inference engine: local Ollama daemon with qwen2.5:3b-instruct (already pulled)
-host       = "http://localhost:11434"
-model      = "qwen2.5:3b-instruct"
-temperature = 0.7
-top_p       = 0.9
-max_tokens  = 512
+
+

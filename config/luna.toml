@@ -86,7 +86,7 @@ fallback_mode = true
 # Gemma 4 E4B acts as both the live assistant and the source of general-purpose training data;
 # the student model is expected to be broadly competent, with the user's own real interactions
 # contributing a smaller personalization layer on top.
-student_base_model = "Qwen/Qwen2.5-5B"
+student_base_model = "google/gemma-4-E4B-it"
 checkpoint_dir = "checkpoints/luna-student"
 auto_start_training_on_boot = false   # User explicitly presses 'Start Training' in UI
 max_retained_checkpoints = 5          # Keep at least last 3-5 versioned checkpoints for rollback

@@ -4,7 +4,7 @@ Coordinates the 5 core states of the voice assistant:
 - State 1: SLEEPING (Passive background wake-word listening for 'Luna' / 'Hey Luna')
 - State 2: LISTENING (Active microphone recording of user's command after 'Yes?')
 - State 3: THINKING (Speech-to-text transcription and prompt preparation)
-- State 4: EXECUTING (AI reasoning via Qwen/Gemma, tool execution, or direct command)
+- State 4: EXECUTING (AI reasoning, tool execution, or direct command)
 - State 5: SPEAKING (TTS audio output playing back to user)
 """
 

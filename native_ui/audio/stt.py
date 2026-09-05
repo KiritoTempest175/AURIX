@@ -14,6 +14,19 @@ from typing import Optional
 
 logger = logging.getLogger("luna.audio.stt")
 
+def _ensure_speech_recognition() -> bool:
+    global sr, HAS_SPEECH_RECOGNITION
+    if not HAS_SPEECH_RECOGNITION:
+        try:
+            import speech_recognition as _sr
+            sr = _sr
+            HAS_SPEECH_RECOGNITION = True
+        except ImportError:
+            sr = None
+            HAS_SPEECH_RECOGNITION = False
+    return HAS_SPEECH_RECOGNITION
+
+
 try:
     import speech_recognition as sr
     HAS_SPEECH_RECOGNITION = True
@@ -28,13 +41,16 @@ class SpeechToTextEngine:
     def __init__(self, default_language: str = "en-US") -> None:
         self.default_language = default_language
         self._recognizer: Optional[sr.Recognizer] = None
-        if HAS_SPEECH_RECOGNITION:
+        if _ensure_speech_recognition():
             self._recognizer = sr.Recognizer()
             # Dynamic energy threshold adjustments
             self._recognizer.dynamic_energy_threshold = True
 
     @property
     def is_available(self) -> bool:
+        if self._recognizer is None and _ensure_speech_recognition():
+            self._recognizer = sr.Recognizer()
+            self._recognizer.dynamic_energy_threshold = True
         return HAS_SPEECH_RECOGNITION and self._recognizer is not None
 
     def transcribe(
