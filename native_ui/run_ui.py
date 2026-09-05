@@ -30,20 +30,37 @@ import psutil
 import slint
 
 from ai_engine.inference.gemma_e4b import get_default_gemma_runner
+from ai_engine.inference.qwen3b_ollama import get_default_qwen_runner
 from ai_engine.training.checkpoint_manager import get_default_checkpoint_manager
 from ai_engine.training.student_qlora_loop import get_default_student_trainer
 from data_pipeline.storage.telemetry_daemon import get_default_telemetry_daemon
-from native_ui.audio.wakeword_detector import get_default_wakeword_detector
-
-try:
-    import core_engine
-    HAS_RUST_CORE = True
-except ImportError:
-    core_engine = None
-    HAS_RUST_CORE = False
+from native_ui.audio import (
+    AssistantState,
+    get_assistant_state_machine,
+    get_default_wakeword_detector,
+    is_cancel_phrase,
+    record_audio,
+    speak,
+    transcribe_audio,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("luna.native_ui.run_ui")
+
+try:
+    import core_engine
+    # Verify it is the compiled Rust extension (.pyd), NOT the bare source directory
+    # which Python can silently import as an empty namespace package.
+    if not hasattr(core_engine, "SystemState"):
+        raise ImportError(
+            "core_engine imported as a source-directory namespace package — "
+            "compiled .pyd extension not found. Run: maturin develop / cargo build."
+        )
+    HAS_RUST_CORE = True
+except ImportError as _ce_err:
+    logger.warning("Rust core_engine not available (%s). Running in pure-Python fallback mode.", _ce_err)
+    core_engine = None
+    HAS_RUST_CORE = False
 
 
 class LunaController:
@@ -54,9 +71,19 @@ class LunaController:
         self.start_time = time.time()
         self.cmd_count = 0
         self.response_queue: queue.Queue[tuple[str, str]] = queue.Queue()
+        self._voice_input_queue: queue.Queue[str] = queue.Queue()
 
         # 1. Initialize Subsystems
-        logger.info("Initializing Gemma 3n E4B Inference Engine...")
+        # Primary: Qwen 2.5 3B via local Ollama (qwen2.5:3b-instruct)
+        logger.info("Initializing Qwen 2.5 3B Ollama Runner (primary)...")
+        self.qwen_runner = get_default_qwen_runner()
+        if self.qwen_runner.is_available:
+            logger.info("Qwen 2.5 3B ready via Ollama at %s", self.qwen_runner.host)
+        else:
+            logger.warning("Qwen 3B unavailable — start Ollama with: ollama serve")
+
+        # Fallback: Gemma 3n E4B (HuggingFace / Unsloth)
+        logger.info("Initializing Gemma 3n E4B Inference Engine (fallback)...")
         self.gemma_runner = get_default_gemma_runner()
 
         logger.info("Initializing Student-5B Training Controller...")
@@ -67,6 +94,10 @@ class LunaController:
 
         logger.info("Initializing Telemetry Ingestion Daemon...")
         self.telemetry = get_default_telemetry_daemon()
+
+        logger.info("Initializing Assistant State Machine...")
+        self.state_machine = get_assistant_state_machine()
+        self.state_machine.on_state_change = self._on_assistant_state_change
 
         logger.info("Initializing Wake-Word Detector ('Luna')...")
         self.wakeword = get_default_wakeword_detector()
@@ -116,6 +147,8 @@ class LunaController:
         self.app.alert_retry = self._handle_alert_retry
         self.app.alert_cancel = self._handle_alert_cancel
         self.app.alert_close = self._handle_alert_close
+        self.app.trigger_voice = self._handle_trigger_voice
+
 
     def _get_time_str(self) -> str:
         return datetime.datetime.now().strftime("%H:%M:%S")
@@ -166,27 +199,194 @@ class LunaController:
                 elif lower in ("luna", "hey luna", "aurix", "wake up", "call luna", "hello"):
                     reply = "LUNA Executive online and listening. Ready for your command."
                 else:
-                    formatted_prompt = self.gemma_runner.format_chat_prompt(user_message=text)
-                    reply = self.gemma_runner.generate_response(formatted_prompt)
+                    # Primary: Qwen 2.5 3B via Ollama
+                    if self.qwen_runner.is_available:
+                        prompt = self.qwen_runner.format_chat_prompt(user_message=text)
+                        reply = self.qwen_runner.generate_response(prompt)
+                    else:
+                        # Fallback: Gemma 3n E4B
+                        logger.debug("Qwen unavailable, falling back to Gemma runner.")
+                        prompt = self.gemma_runner.format_chat_prompt(user_message=text)
+                        reply = self.gemma_runner.generate_response(prompt)
             except Exception as err:
                 reply = f"[Error]: {err}"
             self.response_queue.put((reply, self._get_time_str()))
 
-        threading.Thread(target=generate_job, daemon=True, name="GemmaInferenceThread").start()
+        threading.Thread(target=generate_job, daemon=True, name="QwenInferenceThread").start()
 
     def _poll_response_queue(self) -> None:
-        """Polls queue for async AI response and appends to Slint UI model."""
+        """Polls queue for async AI response and appends to Slint UI model.
+        Also polls voice input queue for transcribed speech to dispatch.
+        All runs on the Slint main thread via Timer callback — safe to touch self.app.
+        """
+        # 1. Poll voice input queue (transcribed speech from mic)
+        while not self._voice_input_queue.empty():
+            spoken_text = self._voice_input_queue.get_nowait()
+            if spoken_text:
+                self._handle_send_message(spoken_text)
+
+        # 2. Poll AI inference response queue
         while not self.response_queue.empty():
             reply_text, timestamp = self.response_queue.get_nowait()
             current_msgs = list(self.app.messages)
             current_msgs.append({"sender": "LUNA", "text": reply_text, "time": timestamp})
             self.app.messages = slint.ListModel(current_msgs)
 
+            # LUNA speaks response out loud in female voice (non-blocking)
+            def speak_worker(reply: str):
+                self.state_machine.transition_to(AssistantState.SPEAKING)
+                try:
+                    import re
+                    clean = re.sub(r"```[\s\S]*?```", "code omitted", reply)
+                    clean = re.sub(r"[\*_#\[\]\(\)`]", "", clean).strip()
+                    if clean:
+                        speak(clean[:300])
+                finally:
+                    self.state_machine.transition_to(AssistantState.SLEEPING)
+                    if hasattr(self, "wakeword") and self.wakeword:
+                        self.wakeword.resume_listening()
+
+            threading.Thread(target=speak_worker, args=(reply_text,), daemon=True, name="LunaTTSThread").start()
+
+    def _on_assistant_state_change(self, old_state: AssistantState, new_state: AssistantState) -> None:
+        """Callback fired whenever Luna voice assistant state changes."""
+        logger.info(f"Luna Voice State: {old_state.value} -> {new_state.value}")
+
+    def _set_toast(self, msg: str, visible: bool = True) -> None:
+        """Thread-safe toast update — marshals to Slint main thread."""
+        def _do():
+            try:
+                self.app.toast_message = msg
+                self.app.toast_visible = visible
+            except Exception:
+                pass
+        try:
+            slint.invoke_from_event_loop(_do)
+        except Exception:
+            pass
+
+    def _run_voice_command_loop(self, confirmation: Optional[str] = None) -> None:
+        """Core voice assistant pipeline executing the 5-state cycle:
+        State 1: SLEEPING  -> Background wake-word listening
+        State 2: LISTENING -> Wake ack ('Yes?') + Dynamic mic recording
+        State 3: THINKING  -> STT transcription + Cancel phrase detection
+        State 4: EXECUTING -> Dispatched to Qwen/Gemma AI brain or tool runner
+        State 5: SPEAKING  -> TTS speech synthesis -> Return to State 1 (SLEEPING)
+        """
+        # Avoid overlapping runs if assistant is already actively listening/processing
+        if not self.state_machine.is_sleeping():
+            logger.debug(f"Voice pipeline busy, current state: {self.state_machine.current_state.value}")
+            return
+
+        def voice_worker():
+            try:
+                # 1. State: LISTENING
+                self.state_machine.transition_to(AssistantState.LISTENING)
+                if hasattr(self, "wakeword") and self.wakeword:
+                    self.wakeword.pause_listening()
+
+                if confirmation:
+                    now_str = self._get_time_str()
+                    self._set_toast(f"Luna: '{confirmation}' (Listening...)", True)
+
+                    def _show_wake_ack():
+                        try:
+                            msgs = list(self.app.messages)
+                            msgs.append({"sender": "LUNA", "text": confirmation, "time": now_str})
+                            self.app.messages = slint.ListModel(msgs)
+                        except Exception:
+                            pass
+                    try:
+                        slint.invoke_from_event_loop(_show_wake_ack)
+                    except Exception:
+                        pass
+
+                    # Speak snappy confirmation "Yes?" (non-interruptible, fast response)
+                    speak(confirmation, interruptible=False)
+                else:
+                    self._set_toast("Listening... Speak now.", True)
+
+                def update_status(msg: str):
+                    self._set_toast(msg, True)
+
+                audio_dir = os.path.join(ROOT_DIR, "data")
+                os.makedirs(audio_dir, exist_ok=True)
+                wav_path = os.path.join(audio_dir, "input.wav")
+
+                # 2. Record dynamically with live noise calibration and silence cutoff
+                rec = record_audio(
+                    filename=wav_path,
+                    sample_rate=16000,
+                    silence_limit=1.2,
+                    initial_timeout=8.0,
+                    on_status=update_status,
+                )
+
+                if not rec:
+                    # Timeout: User said nothing within 8 seconds
+                    logger.info("Voice command listening timed out (no speech detected).")
+                    self._set_toast("No command detected.")
+                    speak("No command detected.", interruptible=False)
+                    time.sleep(1.5)
+                    self._set_toast("", False)
+                    self.state_machine.transition_to(AssistantState.SLEEPING)
+                    if hasattr(self, "wakeword") and self.wakeword:
+                        self.wakeword.resume_listening()
+                    return
+
+                # 3. State: THINKING (Speech-to-Text Transcription)
+                self.state_machine.transition_to(AssistantState.THINKING)
+                self._set_toast("Transcribing command...")
+                spoken_text = transcribe_audio(rec)
+
+                if not spoken_text:
+                    self._set_toast("Could not understand audio. Please try again.")
+                    speak("I couldn't hear that clearly. Please try again.", interruptible=False)
+                    time.sleep(1.5)
+                    self._set_toast("", False)
+                    self.state_machine.transition_to(AssistantState.SLEEPING)
+                    if hasattr(self, "wakeword") and self.wakeword:
+                        self.wakeword.resume_listening()
+                    return
+
+                # 4. Check for Cancellation ("cancel", "never mind", "stop", "dismiss")
+                if is_cancel_phrase(spoken_text):
+                    logger.info(f"Voice command cancelled by user: '{spoken_text}'")
+                    self._set_toast("Command cancelled.")
+                    speak("Cancelled.", interruptible=False)
+                    time.sleep(1.0)
+                    self._set_toast("", False)
+                    self.state_machine.transition_to(AssistantState.SLEEPING)
+                    if hasattr(self, "wakeword") and self.wakeword:
+                        self.wakeword.resume_listening()
+                    return
+
+                # 5. State: EXECUTING -> Dispatch to Main AI / LLM
+                self.state_machine.transition_to(AssistantState.EXECUTING)
+                self._set_toast(f'Heard: "{spoken_text}"')
+                self._voice_input_queue.put(spoken_text)
+                # Note: wakeword remains paused until speak_worker finishes TTS response!
+
+            except Exception as e:
+                logger.error(f"Voice interaction pipeline error: {e}", exc_info=True)
+                self._set_toast(f"Voice error: {e}")
+                self.state_machine.transition_to(AssistantState.SLEEPING)
+                if hasattr(self, "wakeword") and self.wakeword:
+                    self.wakeword.resume_listening()
+
+        threading.Thread(target=voice_worker, daemon=True, name="LunaVoiceWorker").start()
+
+    def _handle_trigger_voice(self) -> None:
+        """Triggered when user clicks VOICE / mic button on GUI."""
+        logger.info("Voice input triggered by GUI button.")
+        self._run_voice_command_loop(confirmation=None)
+
     def _handle_wakeword_triggered(self, confirmation: str) -> None:
-        """Triggered when offline wake-word detector spots 'Luna'."""
+        """Triggered when offline wake-word detector spots 'Luna' or 'Hey Luna'."""
         logger.info(f"Wake-Word Event: {confirmation}")
-        self.app.toast_message = f"Luna awake: '{confirmation}'"
-        self.app.toast_visible = True
+        self._run_voice_command_loop(confirmation=confirmation)
+
+
 
     def _handle_toggle_training(self) -> None:
         """User clicked Start / Stop Continuous Training toggle button."""
@@ -235,6 +435,8 @@ class LunaController:
             "time": self._get_time_str(),
         }
         self.app.messages = slint.ListModel([welcome])
+        # Reset Qwen rolling context so next conversation starts fresh
+        self.qwen_runner.clear_history()
         self.app.toast_message = "Conversation history cleared."
         self.app.toast_visible = True
 

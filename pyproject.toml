@@ -29,6 +29,10 @@ dependencies = [
     "pyarrow",
     "tqdm>=4.66.2",
     "rich>=13.7.1",
+    "cryptography>=42.0.0",
+    "slint",
+    "duckdb>=1.0.0",
+    "psutil>=5.9.0",
 ]
 
 [project.optional-dependencies]
@@ -42,7 +46,7 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["ai_engine*", "data_pipeline*"]
+include = ["ai_engine*", "data_pipeline*", "native_ui*", "security*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

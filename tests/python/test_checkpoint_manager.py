@@ -18,14 +18,24 @@ from ai_engine.training.checkpoint_manager import (
 from security.encryption import CheckpointEncryptor
 
 
+import pytest
+from contextlib import contextmanager
+
+
 @contextmanager
 def get_temp_ckpt_dir():
-    temp_dir = tempfile.mkdtemp(prefix="luna_test_ckpts_")
+    d = tempfile.mkdtemp(prefix="luna_test_ckpts_")
     try:
-        yield temp_dir
+        yield d
     finally:
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
+        if os.path.exists(d):
+            shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.fixture
+def temp_dir():
+    with get_temp_ckpt_dir() as d:
+        yield d
 
 
 def test_checkpoint_save_and_load_roundtrip(temp_dir: str):

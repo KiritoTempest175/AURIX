@@ -23,3 +23,5 @@ accelerate>=0.28.0
 # Data Pipeline & Vector Storage
 chromadb>=0.4.24
 faiss-cpu>=1.7.4
+duckdb>=1.0.0
+uvicorn>=0.28.0

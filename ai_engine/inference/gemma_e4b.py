@@ -81,6 +81,11 @@ class GemmaModelRunner:
             self.is_loaded = True
             return
 
+        if self.fallback_mode and not os.path.exists(self.model_name):
+            self.is_loaded = True
+            logger.info("Local Gemma weights not present. Operating in deterministic offline fallback mode.")
+            return
+
         try:
             if UNSLOTH_AVAILABLE and self.device == "cuda":
                 logger.info(
@@ -95,8 +100,18 @@ class GemmaModelRunner:
                 )
                 FastLanguageModel.for_inference(self.model)
             else:
-                logger.info(f"Checking Gemma weights '{self.model_name}' via HuggingFace Transformers (device={self.device})...")
-                self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+                logger.info(f"Checking Gemma weights '{self.model_name}' (device={self.device})...")
+                # Attempt local files first to prevent network timeouts when offline or in test environments
+                local_only = self.fallback_mode and not os.path.exists(self.model_name)
+                try:
+                    self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, local_files_only=local_only)
+                except Exception:
+                    if self.fallback_mode:
+                        self.is_loaded = True
+                        logger.info("Local weights not present. Operating in deterministic offline mode.")
+                        return
+                    raise
+
                 quant_config = None
                 if self.load_in_4bit and self.device == "cuda" and BitsAndBytesConfig:
                     quant_config = BitsAndBytesConfig(
@@ -113,6 +128,7 @@ class GemmaModelRunner:
                     device_map="auto" if self.device == "cuda" else None,
                     torch_dtype=model_dtype,
                     low_cpu_mem_usage=True,
+                    local_files_only=local_only,
                 )
             self.is_loaded = True
             logger.info("Gemma E4B successfully loaded for inference.")

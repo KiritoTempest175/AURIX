@@ -792,7 +792,7 @@ impl SystemState {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
         Canonicalization Security Protocol
     </div>
-    If a requested file path resolves outside the designated <code>ALLOWED_ROOT</code> (e.g. <code>C:\Windows\System32</code> or via <code>..\..\</code> traversal), <code>secure_path_resolve()</code> triggers an immediate safety panic, which PyO3 catches and translates into a Python <code>RuntimeError("Access Denied")</code>.
+    If a requested file path resolves outside the designated <code>ALLOWED_ROOT</code> (e.g. <code>C:\\Windows\\System32</code> or via <code>..\\..\\</code> traversal), <code>secure_path_resolve()</code> triggers an immediate safety panic, which PyO3 catches and translates into a Python <code>RuntimeError("Access Denied")</code>.
 </div>
 
 <pre class="code-rust"><code>// Canonicalization containment check algorithm
@@ -841,14 +841,14 @@ pub fn secure_path_resolve(base_dir: &Path, target: &str) -> Result&lt;PathBuf, 
 </p>
 
 <pre class="code-py"><code># Prompt Template Structure with Multi-Modal Context Grounding
-PROMPT_TEMPLATE = """### Instruction:
+PROMPT_TEMPLATE = \"\"\"### Instruction:
 {instruction}
 
 ### Input:
 {input}
 
 ### Response:
-{output}"""</code></pre>
+{output}\"\"\"</code></pre>
 
 <h2>2. Unsloth QLoRA Continuous Training Loop (`training/qlora_loop.py`)</h2>
 <p>

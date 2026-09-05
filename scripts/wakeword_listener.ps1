@@ -6,7 +6,11 @@ try {
     $rec.SetInputToDefaultAudioDevice()
 
     $choices = New-Object System.Speech.Recognition.Choices
-    $choices.Add([string[]]@("luna", "hey luna", "aurix", "wake up", "hello luna", "call luna"))
+    $choices.Add([string[]]@(
+        "luna", "hey luna", "okay luna", "hi luna", "hello luna",
+        "wake up luna", "aurix", "wake up"
+    ))
+
 
     $builder = New-Object System.Speech.Recognition.GrammarBuilder
     $builder.Append($choices)

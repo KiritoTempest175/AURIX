@@ -8,5 +8,11 @@ try {
     $voice = New-Object -ComObject SAPI.SpVoice
     $voice.Rate = 1
     $voice.Volume = 100
+    # Prefer female voice (Microsoft Zira / Hazel)
+    $femaleVoice = $voice.GetVoices() | Where-Object { $_.GetDescription() -match 'Zira|Hazel|Female|Eva|Susan|Jenny' } | Select-Object -First 1
+    if ($femaleVoice) {
+        $voice.Voice = $femaleVoice
+    }
     [void]$voice.Speak($clean, 1) # 1 = SVSFlagsAsync (non-blocking)
 } catch {}
+

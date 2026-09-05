@@ -49,3 +49,10 @@ device = "cuda"
 temperature = 0.7
 top_p = 0.9
 
+[qwen_ollama]
+# Primary inference engine: local Ollama daemon with qwen2.5:3b-instruct (already pulled)
+host       = "http://localhost:11434"
+model      = "qwen2.5:3b-instruct"
+temperature = 0.7
+top_p       = 0.9
+max_tokens  = 512

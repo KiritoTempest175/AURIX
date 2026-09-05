@@ -9,6 +9,10 @@ from data_pipeline.storage.telemetry_daemon import TelemetryIngestionDaemon
 from data_pipeline.self_healing.error_diagnostics import SelfHealingEngine, TracebackAnalyzer
 
 
+import pytest
+from contextlib import contextmanager
+
+
 @contextmanager
 def get_temp_db_path():
     temp_dir = tempfile.mkdtemp(prefix="luna_db_test_")
@@ -18,6 +22,12 @@ def get_temp_db_path():
     finally:
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@pytest.fixture
+def db_path():
+    with get_temp_db_path() as db_file:
+        yield db_file
 
 
 def test_telemetry_ingestion_and_secret_scrubbing(db_path: str):
