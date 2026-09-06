@@ -838,18 +838,18 @@ class JarvisApp(tk.Tk):
             self.temp_bar.set(min(100, temp))
             self.temp_lbl.config(text=f"{temp:.0f} \u00b0C")
 
-        # Push telemetry frame to backend
-        if self.telemetry:
+        # Push telemetry frame to backend (use internal attributes to avoid lazy-loading on every tick)
+        if self._telemetry:
             try:
                 power_state = "ACTIVE"
-                if self.system_state:
-                    power_state = self.system_state.get_power_state_name()
-                self.telemetry.ingest_hardware_metrics(
+                if self._system_state:
+                    power_state = self._system_state.get_power_state_name()
+                self._telemetry.ingest_hardware_metrics(
                     ram_gb=round(used_gb, 2) if HAS_PSUTIL else 0.0,
                     vram_gb=0.0,
                     power_state=power_state,
                     training_state=(
-                        "RUNNING" if self.student_trainer and getattr(self.student_trainer, "is_running", False)
+                        "RUNNING" if self._student_trainer and getattr(self._student_trainer, "is_running", False)
                         else "STOPPED"
                     ),
                 )
