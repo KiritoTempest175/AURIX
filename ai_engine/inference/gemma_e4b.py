@@ -294,9 +294,12 @@ class GemmaModelRunner:
                 logger.error(f"Inference error: {e}. Yielding fallback response.")
                 reply = self._fallback_generate(prompt)
 
-        # Update rolling history for multi-turn context
+        # Update rolling history for multi-turn context (capped to prevent RAM bloat)
         self._history.append({"role": "user", "content": prompt})
         self._history.append({"role": "assistant", "content": reply})
+        # Keep only the last 20 messages (10 exchanges) to bound memory usage
+        if len(self._history) > 20:
+            self._history = self._history[-20:]
         return reply
 
     def _fallback_generate(self, prompt: str) -> str:

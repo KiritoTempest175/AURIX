@@ -133,9 +133,15 @@ FONT = "Consolas"
 if "Consolas" not in ():
     pass  # Consolas is used on Windows; fallback handled below at runtime
 
+# Pre-cached font tuples — avoids re-allocating in animation hot paths
+_FONT_CACHE: dict[tuple, tuple] = {}
+
 
 def mono(size, weight="normal"):
-    return (FONT, size, weight)
+    key = (size, weight)
+    if key not in _FONT_CACHE:
+        _FONT_CACHE[key] = (FONT, size, weight)
+    return _FONT_CACHE[key]
 
 
 # ============================================================== WIDGETS ===
@@ -243,93 +249,108 @@ class JarvisApp(tk.Tk):
         else:
             self.mem_total_gb = 12.0
 
-        # ── Initialize Backend Subsystems ────────────────────────────
+        # ── Backend handles (lazy-loaded on first use to save RAM) ────
         self._response_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self._voice_input_queue: queue.Queue[str] = queue.Queue()
-        self._init_backends()
+        self._gemma_runner = None
+        self._student_trainer = None
+        self._checkpoint_manager = None
+        self._telemetry = None
+        self._state_machine = None
+        self._wakeword = None
+        self._system_state = None
+        self._backends_initialized = False
+
+        # Only init lightweight subsystems at startup (core_engine, wakeword)
+        self._init_lightweight_backends()
 
         self._build_header()
         self._build_main()
 
         self.after(250, self._tick_datetime)
         self.after(400, self._tick_system_stats)
-        self.after(50, self._tick_radar)
-        self.after(100, self._poll_response_queue)
+        self.after(66, self._tick_radar)  # ~15 FPS instead of 25
+        self.after(150, self._poll_response_queue)
 
-    # ── Backend Initialization ───────────────────────────────────────
-    def _init_backends(self):
-        """Initialize all available backend subsystems."""
-        # Gemma 3n E4B Foundation Model
-        self.gemma_runner = None
-        if HAS_GEMMA:
+    # ── Lazy Properties — backends loaded only when first accessed ───
+    @property
+    def gemma_runner(self):
+        if self._gemma_runner is None and HAS_GEMMA:
             try:
-                logger.info("Initializing Gemma 3n E4B Inference Engine...")
-                self.gemma_runner = get_default_gemma_runner()
-                if getattr(self.gemma_runner, "has_weights", False):
-                    logger.info(
-                        "Gemma E4B live neural model loaded (device: %s, params: %s).",
-                        self.gemma_runner.device,
-                        self.gemma_runner.effective_params,
-                    )
-                elif getattr(self.gemma_runner, "is_available", False):
-                    logger.info("Gemma E4B engine ready in deterministic mode.")
+                logger.info("Lazy-loading Gemma 3n E4B Inference Engine...")
+                self._gemma_runner = get_default_gemma_runner()
+                logger.info("Gemma E4B engine ready.")
             except Exception as e:
                 logger.error("Failed to initialize Gemma runner: %s", e)
+        return self._gemma_runner
 
-        # Student-5B Trainer
-        self.student_trainer = None
-        if HAS_TRAINER:
+    @property
+    def student_trainer(self):
+        if self._student_trainer is None and HAS_TRAINER:
             try:
-                logger.info("Initializing Student-5B Training Controller...")
-                self.student_trainer = get_default_student_trainer()
+                self._student_trainer = get_default_student_trainer()
             except Exception as e:
                 logger.error("Failed to initialize Student trainer: %s", e)
+        return self._student_trainer
 
-        # Checkpoint Manager
-        self.checkpoint_manager = None
-        if HAS_CHECKPOINT:
+    @property
+    def checkpoint_manager(self):
+        if self._checkpoint_manager is None and HAS_CHECKPOINT:
             try:
-                logger.info("Initializing Checkpoint Manager...")
-                self.checkpoint_manager = get_default_checkpoint_manager()
+                self._checkpoint_manager = get_default_checkpoint_manager()
             except Exception as e:
                 logger.error("Failed to initialize Checkpoint manager: %s", e)
+        return self._checkpoint_manager
 
-        # Telemetry Daemon
-        self.telemetry = None
-        if HAS_TELEMETRY:
+    @property
+    def telemetry(self):
+        if self._telemetry is None and HAS_TELEMETRY:
             try:
-                logger.info("Initializing Telemetry Ingestion Daemon...")
-                self.telemetry = get_default_telemetry_daemon()
+                self._telemetry = get_default_telemetry_daemon()
             except Exception as e:
                 logger.error("Failed to initialize Telemetry daemon: %s", e)
+        return self._telemetry
 
-        # Voice State Machine + Wake-Word Detector
-        self.state_machine = None
-        self.wakeword = None
+    @property
+    def state_machine(self):
+        return self._state_machine
+
+    @property
+    def wakeword(self):
+        return self._wakeword
+
+    @property
+    def system_state(self):
+        return self._system_state
+
+    # ── Lightweight Init (startup) ───────────────────────────────────
+    def _init_lightweight_backends(self):
+        """Initialize only lightweight subsystems at startup. Heavy backends
+        (Gemma, trainer, checkpoint manager) are lazy-loaded on first use."""
+        # Voice State Machine + Wake-Word Detector (lightweight)
         if HAS_AUDIO:
             try:
                 logger.info("Initializing Assistant State Machine...")
-                self.state_machine = get_assistant_state_machine()
-                self.state_machine.on_state_change = self._on_assistant_state_change
+                self._state_machine = get_assistant_state_machine()
+                self._state_machine.on_state_change = self._on_assistant_state_change
 
                 logger.info("Initializing Wake-Word Detector ('Luna')...")
-                self.wakeword = get_default_wakeword_detector()
-                self.wakeword.on_wake_detected = self._handle_wakeword_triggered
-                self.wakeword.start_listening()
+                self._wakeword = get_default_wakeword_detector()
+                self._wakeword.on_wake_detected = self._handle_wakeword_triggered
+                self._wakeword.start_listening()
             except Exception as e:
                 logger.error("Failed to initialize audio subsystem: %s", e)
 
-        # Rust Core Engine State
-        self.system_state = None
+        # Rust Core Engine State (lightweight C extension)
         if HAS_RUST_CORE:
             try:
-                self.system_state = core_engine.SystemState()
+                self._system_state = core_engine.SystemState()
                 core_engine.start_hardware_monitor()
                 logger.info("Rust Hardware Power Governor started.")
             except Exception as e:
                 logger.warning("Could not start hardware monitor: %s", e)
 
-        logger.info("AURIX Frontend — all available subsystems initialized.")
+        logger.info("AURIX Frontend — lightweight subsystems initialized. Heavy backends load on demand.")
 
     # ------------------------------------------------------------- HEADER --
     def _build_header(self):
@@ -838,6 +859,11 @@ class JarvisApp(tk.Tk):
         self.after(1500, self._tick_system_stats)
 
 
+    def _draw_ring(self, c, cx, cy, rr, color, dash=None, width=1):
+        """Draw a ring on canvas — hoisted out of hot loop to avoid closure re-creation."""
+        c.create_oval(cx - rr, cy - rr, cx + rr, cy + rr,
+                       outline=color, width=width, dash=dash)
+
     def _tick_radar(self):
         c = self.radar
         c.delete("all")
@@ -846,42 +872,44 @@ class JarvisApp(tk.Tk):
         if w > 10 and h > 10:
             cx, cy = w / 2, h / 2
             R = min(w, h) * 0.42
+            ring = self._draw_ring  # local ref avoids repeated attr lookup
 
-            def ring(rr, color, dash=None, width=1):
-                c.create_oval(cx - rr, cy - rr, cx + rr, cy + rr,
-                               outline=color, width=width, dash=dash)
-
-            ring(R, LINE)
-            ring(R * 0.82, LINE_BRIGHT, dash=(4, 6))
-            ring(R * 0.62, LINE)
-            ring(R * 0.42, CYAN_DIM, dash=(3, 5))
+            ring(c, cx, cy, R, LINE)
+            ring(c, cx, cy, R * 0.82, LINE_BRIGHT, dash=(4, 6))
+            ring(c, cx, cy, R * 0.62, LINE)
+            ring(c, cx, cy, R * 0.42, CYAN_DIM, dash=(3, 5))
 
             c.create_line(cx - R - 15, cy, cx + R + 15, cy, fill=LINE)
             c.create_line(cx, cy - R - 15, cx, cy + R + 15, fill=LINE)
 
             # rotating orbit brackets
             a = math.radians(self._radar_angle)
-            for off in (0, math.pi):
-                bx = cx + math.cos(a + off) * R * 0.82
-                by = cy + math.sin(a + off) * R * 0.82
+            cos_a = math.cos(a)
+            sin_a = math.sin(a)
+            orbit_r = R * 0.82
+            for sign in (1, -1):
+                bx = cx + cos_a * sign * orbit_r
+                by = cy + sin_a * sign * orbit_r
                 c.create_line(bx - 8, by - 8, bx + 8, by + 8,
                               fill=CYAN_BRIGHT, width=2)
 
             # pulse ring
-            pulse_r = R * 0.3 + (self._radar_angle % 60) / 60 * R * 0.5
-            pulse_alpha = 1 - (self._radar_angle % 60) / 60
-            if pulse_alpha > 0.05:
-                ring(pulse_r, CYAN_BRIGHT, width=1)
+            pulse_phase = (self._radar_angle % 60) / 60
+            if pulse_phase < 0.95:
+                pulse_r = R * 0.3 + pulse_phase * R * 0.5
+                ring(c, cx, cy, pulse_r, CYAN_BRIGHT, width=1)
 
+            # Use pre-cached font tuples (mono() caches internally)
+            font_bold_14 = mono(14, "bold")
             s = R * 0.16
             c.create_rectangle(cx - s, cy - s, cx + s, cy + s,
                                 outline=CYAN_BRIGHT, width=1)
             c.create_text(cx, cy - 10, text="CORE", fill=CYAN_BRIGHT,
-                          font=mono(14, "bold"))
+                          font=font_bold_14)
             c.create_text(cx, cy + 10, text="ACTIVE", fill=CYAN_BRIGHT,
-                          font=mono(14, "bold"))
+                          font=font_bold_14)
 
-            self._radar_angle = (self._radar_angle + 1.2) % 360
+            self._radar_angle = (self._radar_angle + 1.8) % 360  # faster rotation to compensate lower FPS
 
         # voice bars
         vc = self.vbar_canvas
@@ -890,10 +918,11 @@ class JarvisApp(tk.Tk):
         if vw > 1:
             n = 9
             bw = vw / n
-            t = self._radar_angle / 10.0
+            phases = self._vbar_phase
+            sin = math.sin
             for i in range(n):
-                self._vbar_phase[i] += 0.15
-                height = 4 + (math.sin(self._vbar_phase[i]) * 0.5 + 0.5) * 18
+                phases[i] += 0.22  # slightly faster to compensate lower FPS
+                height = 4 + (sin(phases[i]) * 0.5 + 0.5) * 18
                 x0 = i * bw + bw * 0.3
                 x1 = x0 + bw * 0.4
                 y1 = 24
@@ -901,7 +930,7 @@ class JarvisApp(tk.Tk):
                 vc.create_rectangle(x0, y0, x1, y1, fill=CYAN_BRIGHT,
                                      outline="")
 
-        self.after(40, self._tick_radar)
+        self.after(66, self._tick_radar)  # ~15 FPS — smooth enough, 40% less CPU/RAM churn
 
 
 if __name__ == "__main__":
