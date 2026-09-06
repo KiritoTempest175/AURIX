@@ -3,9 +3,6 @@ resolver = "2"
 members = [
     "core_engine",
 ]
-exclude = [
-    "native_ui",
-]
 
 [workspace.package]
 version = "0.1.0"

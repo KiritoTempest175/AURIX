@@ -73,3 +73,11 @@ scratch/
 *.a
 *.lib
 pdf_preview/
+
+# Voice Models (download via scripts/download_female_voice.py)
+voices/
+*.onnx
+
+# Generated Guides & Docs
+AURIX_Comprehensive_System_Guide.pdf
+aurix_guide.html

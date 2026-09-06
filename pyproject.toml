@@ -30,7 +30,6 @@ dependencies = [
     "tqdm>=4.66.2",
     "rich>=13.7.1",
     "cryptography>=42.0.0",
-    "slint",
     "duckdb>=1.0.0",
     "psutil>=5.9.0",
 ]

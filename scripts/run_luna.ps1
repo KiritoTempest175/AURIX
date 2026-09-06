@@ -1,11 +1,11 @@
-# LUNA Desktop Executive Launch Script (PowerShell)
-Write-Host "🌙 Launching LUNA Autonomous Executive GUI..." -ForegroundColor Cyan
+# AURIX Desktop Executive Launch Script (PowerShell)
+Write-Host "🚀 Launching AURIX Autonomous Executive GUI..." -ForegroundColor Cyan
 
 # Use $PSScriptRoot to resolve paths regardless of CWD
 $projectRoot = Split-Path $PSScriptRoot -Parent
 
 $python = Join-Path $projectRoot ".venv\Scripts\python.exe"
-$runUi   = Join-Path $projectRoot "native_ui\run_ui.py"
+$frontend = Join-Path $projectRoot "frontend.py"
 
 if (-not (Test-Path $python)) {
     Write-Host "❌ Python venv not found at: $python" -ForegroundColor Red
@@ -13,13 +13,13 @@ if (-not (Test-Path $python)) {
     exit 1
 }
 
-if (-not (Test-Path $runUi)) {
-    Write-Host "❌ run_ui.py not found at: $runUi" -ForegroundColor Red
+if (-not (Test-Path $frontend)) {
+    Write-Host "❌ frontend.py not found at: $frontend" -ForegroundColor Red
     exit 1
 }
 
 Write-Host "Python : $python" -ForegroundColor DarkGray
-Write-Host "Script : $runUi"  -ForegroundColor DarkGray
+Write-Host "Script : $frontend"  -ForegroundColor DarkGray
 
 Set-Location $projectRoot
-& $python $runUi
+& $python $frontend

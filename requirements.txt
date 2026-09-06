@@ -1,5 +1,4 @@
-# LUNA / AURIX Core Dependencies
-slint
+# AURIX Core Dependencies
 psutil>=5.9.0
 cryptography>=42.0.0
 pydantic>=2.6.0

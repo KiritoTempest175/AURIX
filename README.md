@@ -40,11 +40,11 @@ cargo build --manifest-path core_engine/Cargo.toml --release
 Copy-Item target/release/core_engine.dll core_engine.pyd
 ```
 
-### 2. Launch LUNA Command Center GUI
+### 2. Launch AURIX Command Center GUI
 ```powershell
 .\scripts\run_luna.ps1
 # Or:
-python native_ui/run_ui.py
+python frontend.py
 ```
 
 ### 3. Run Test Suites
@@ -83,10 +83,9 @@ luna/
 │   ├── storage/                   # SQLite & DuckDB Schemas & Daemons
 │   ├── vector_store/              # ChromaDB & FAISS Vector Index
 │   └── self_healing/              # Traceback Analyzer & Self-Healing Loop
-├── native_ui/                     # Slint 1.8 Desktop Interface & Audio
-│   ├── ui/                        # Declarative .slint GUI files
-│   ├── audio/                     # Whisper STT, Piper TTS & Wake-Word Detector
-│   └── run_ui.py                  # Python GUI Controller
+├── frontend.py                    # Tkinter Desktop GUI (primary frontend)
+├── native_ui/                     # Audio Subsystem
+│   └── audio/                     # Whisper STT, Piper TTS & Wake-Word Detector
 ├── security/                      # Cryptography, Secret Scrubber, Permissions
 ├── tests/                         # Python & Rust Test Suites
 │   ├── python/
