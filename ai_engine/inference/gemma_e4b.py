@@ -18,11 +18,18 @@ logger = logging.getLogger("luna.ai_engine.gemma_e4b")
 try:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    try:
+        from transformers import AutoModelForMultimodalLM, AutoProcessor
+    except ImportError:
+        AutoModelForMultimodalLM = None
+        AutoProcessor = None
     TORCH_AVAILABLE = True
 except ImportError:
     torch = None
     AutoModelForCausalLM = None
     AutoTokenizer = None
+    AutoModelForMultimodalLM = None
+    AutoProcessor = None
     BitsAndBytesConfig = None
     TORCH_AVAILABLE = False
 
@@ -32,6 +39,29 @@ try:
 except ImportError:
     FastLanguageModel = None
     UNSLOTH_AVAILABLE = False
+
+
+def _read_config_model() -> tuple[str, str]:
+    """Read configured model_name and device from config.toml if present."""
+    try:
+        import tomllib
+    except ImportError:
+        try:
+            import tomli as tomllib
+        except ImportError:
+            tomllib = None
+    if tomllib:
+        try:
+            from pathlib import Path
+            cfg_path = Path(__file__).resolve().parent.parent.parent / "config.toml"
+            if cfg_path.exists():
+                with open(cfg_path, "rb") as f:
+                    cfg = tomllib.load(f)
+                llm = cfg.get("llm", {})
+                return llm.get("model_name", "Qwen/Qwen2.5-Coder-3B-Instruct"), llm.get("device", "cuda")
+        except Exception:
+            pass
+    return "Qwen/Qwen2.5-Coder-3B-Instruct", "cuda"
 
 
 def resolve_model_path(model_name_or_id: str) -> Optional[str]:
@@ -72,22 +102,22 @@ def resolve_model_path(model_name_or_id: str) -> Optional[str]:
 
 
 class GemmaModelRunner:
-    """Orchestrates Gemma 4 E4B model loading, parameter scaling, and inference."""
+    """Orchestrates LLM reasoning model loading, GPU 4-bit scaling, and inference."""
 
-    DEFAULT_MODEL = "google/gemma-4-E4B-it"
+    DEFAULT_MODEL = "Qwen/Qwen2.5-Coder-3B-Instruct"
 
     def __init__(
         self,
-        model_name: str = DEFAULT_MODEL,
+        model_name: Optional[str] = None,
         effective_params: str = "E4B",
         max_seq_length: int = 2048,
         load_in_4bit: bool = True,
         quantization: str = "nf4",
-        device: str = "cuda",
+        device: Optional[str] = None,
         fallback_mode: bool = True,
         force_fallback: bool = False,
     ) -> None:
-        """Initialize Gemma 3n model runner.
+        """Initialize LLM model runner with GPU acceleration and 4-bit quantization.
 
         Args:
             model_name: HuggingFace model path or local directory.
@@ -99,17 +129,21 @@ class GemmaModelRunner:
             fallback_mode: If True, operates in simulation mode if GPU/weights unavailable.
             force_fallback: If True, skips loading weights and forces deterministic reasoning mode.
         """
-        self.model_name = model_name
+        cfg_model, cfg_device = _read_config_model()
+        self.model_name = model_name or cfg_model or self.DEFAULT_MODEL
         self.effective_params = effective_params.upper()
         self.max_seq_length = max_seq_length
         self.load_in_4bit = load_in_4bit
         self.quantization = quantization
-        self.device = device if (torch and torch.cuda.is_available()) else "cpu"
+
+        target_dev = device or cfg_device or "cuda"
+        self.device = target_dev if (torch and torch.cuda.is_available() and target_dev == "cuda") else "cpu"
         self.fallback_mode = fallback_mode
         self.force_fallback = force_fallback
 
         self.model: Optional[Any] = None
         self.tokenizer: Optional[Any] = None
+        self.processor: Optional[Any] = None
         self.is_loaded: bool = False
         self._history: List[Dict[str, str]] = []
 
@@ -117,7 +151,7 @@ class GemmaModelRunner:
 
     @property
     def is_available(self) -> bool:
-        """Return True if Gemma runner is loaded or ready for inference."""
+        """Return True if model runner is loaded or ready for inference."""
         return self.is_loaded
 
     @property
@@ -131,7 +165,7 @@ class GemmaModelRunner:
         logger.debug("GemmaModelRunner: conversation history cleared.")
 
     def _initialize_model(self) -> None:
-        """Load Gemma 3n / 4 E4B model weights or initialize offline fallback."""
+        """Load LLM weights on GPU (RTX 4060) in 4-bit NF4 or initialize offline fallback."""
         if not TORCH_AVAILABLE:
             logger.info("PyTorch / Transformers not installed. Operating in offline fallback mode.")
             self.is_loaded = True
@@ -144,10 +178,26 @@ class GemmaModelRunner:
 
         resolved_path = resolve_model_path(self.model_name)
         if not resolved_path:
+            # Check fallback to any local candidate in cache
+            candidates = [
+                "Qwen/Qwen2.5-Coder-3B-Instruct",
+                "Qwen/Qwen2.5-3B-Instruct",
+                "Qwen/Qwen2.5-Coder-7B-Instruct",
+                "google/gemma-4-E4B-it",
+            ]
+            for cand in candidates:
+                cand_path = resolve_model_path(cand)
+                if cand_path:
+                    logger.info(f"Preferred model '{self.model_name}' not found locally. Auto-selecting local cached model: '{cand}'")
+                    resolved_path = cand_path
+                    self.model_name = cand
+                    break
+
+        if not resolved_path:
             if self.fallback_mode:
                 self.is_loaded = True
                 logger.info(
-                    "Local Gemma weights for '%s' not present in cache. Operating in deterministic offline fallback mode.",
+                    "Local weights for '%s' not present in cache. Operating in deterministic offline fallback mode.",
                     self.model_name,
                 )
                 return
@@ -156,12 +206,12 @@ class GemmaModelRunner:
         else:
             target_path = resolved_path
             local_only = True
-            logger.info("Found local Gemma weights at '%s'. Initializing model...", target_path)
+            logger.info("Found local model weights at '%s'. Initializing model...", target_path)
 
         try:
             if UNSLOTH_AVAILABLE and self.device == "cuda":
                 logger.info(
-                    f"Loading Gemma 3n ({self.effective_params}) with Unsloth from '{target_path}' "
+                    f"Loading model ({self.effective_params}) with Unsloth from '{target_path}' "
                     f"in 4-bit {self.quantization.upper()}..."
                 )
                 self.model, self.tokenizer = FastLanguageModel.from_pretrained(
@@ -172,8 +222,12 @@ class GemmaModelRunner:
                 )
                 FastLanguageModel.for_inference(self.model)
             else:
-                logger.info("Loading Gemma tokenizer from '%s'...", target_path)
-                self.tokenizer = AutoTokenizer.from_pretrained(target_path, local_files_only=local_only)
+                # GPU Tensor Core optimizations
+                if self.device == "cuda" and hasattr(torch, "backends"):
+                    if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
+                        torch.backends.cuda.matmul.allow_tf32 = True
+                    if hasattr(torch.backends, "cudnn"):
+                        torch.backends.cudnn.benchmark = True
 
                 quant_config = None
                 if self.load_in_4bit and self.device == "cuda" and BitsAndBytesConfig:
@@ -182,22 +236,46 @@ class GemmaModelRunner:
                         bnb_4bit_quant_type=self.quantization,
                         bnb_4bit_compute_dtype=torch.float16,
                     )
+
                 model_dtype = torch.float16 if self.device == "cuda" else (
                     torch.bfloat16 if hasattr(torch, "bfloat16") else torch.float32
                 )
-                logger.info("Loading Gemma weights on device '%s' (dtype=%s)...", self.device, model_dtype)
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    target_path,
-                    quantization_config=quant_config,
-                    device_map="auto" if self.device == "cuda" else None,
-                    torch_dtype=model_dtype,
-                    low_cpu_mem_usage=True,
-                    local_files_only=local_only,
-                )
+
+                # 1. Primary: Load CausalLM (Qwen, Gemma-text, Phi, etc.)
+                try:
+                    logger.info("Loading tokenizer from '%s'...", target_path)
+                    self.tokenizer = AutoTokenizer.from_pretrained(target_path, local_files_only=local_only)
+                    logger.info("Loading model weights on device '%s' (dtype=%s, 4bit=%s)...", self.device, model_dtype, self.load_in_4bit)
+                    self.model = AutoModelForCausalLM.from_pretrained(
+                        target_path,
+                        quantization_config=quant_config,
+                        device_map="auto" if self.device == "cuda" else None,
+                        torch_dtype=model_dtype,
+                        low_cpu_mem_usage=True,
+                        local_files_only=local_only,
+                    )
+                except Exception as causal_err:
+                    # 2. Fallback: Multimodal LM (e.g. Gemma 4 multimodal)
+                    if AutoModelForMultimodalLM and AutoProcessor:
+                        logger.info("CausalLM failed (%s). Trying AutoModelForMultimodalLM...", causal_err)
+                        self.processor = AutoProcessor.from_pretrained(target_path, local_files_only=local_only)
+                        self.tokenizer = getattr(self.processor, "tokenizer", self.processor)
+                        self.model = AutoModelForMultimodalLM.from_pretrained(
+                            target_path,
+                            quantization_config=quant_config,
+                            device_map="auto" if self.device == "cuda" else None,
+                            torch_dtype=model_dtype,
+                            low_cpu_mem_usage=True,
+                            local_files_only=local_only,
+                        )
+                    else:
+                        raise causal_err
+
             self.is_loaded = True
-            logger.info("Gemma E4B successfully loaded for live inference.")
+            vram_mb = (torch.cuda.memory_allocated(0) / (1024 * 1024)) if (torch and torch.cuda.is_available()) else 0
+            logger.info(f"AURIX Model successfully loaded on device '{self.device}' (GPU VRAM: {vram_mb:.1f} MB).")
         except Exception as e:
-            logger.warning("Failed to load Gemma weights (%s). Operating in deterministic reasoning mode.", e)
+            logger.warning("Failed to load model weights (%s). Operating in deterministic reasoning mode.", e)
             self.is_loaded = True
 
     def set_effective_parameters(self, mode: str) -> None:
@@ -290,6 +368,8 @@ class GemmaModelRunner:
                     outputs = self.model.generate(**inputs, **gen_kwargs)
                 generated_tokens = outputs[0][inputs.input_ids.shape[1] :]
                 reply = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+                import re
+                reply = re.sub(r"<think>[\s\S]*?</think>", "", reply).strip()
             except Exception as e:
                 logger.error(f"Inference error: {e}. Yielding fallback response.")
                 reply = self._fallback_generate(prompt)
@@ -318,10 +398,11 @@ _GLOBAL_RUNNER: Optional[GemmaModelRunner] = None
 
 
 def get_default_gemma_runner() -> GemmaModelRunner:
-    """Return default singleton GemmaModelRunner."""
+    """Return default singleton GemmaModelRunner configured with local GPU model."""
     global _GLOBAL_RUNNER
     if _GLOBAL_RUNNER is None:
-        _GLOBAL_RUNNER = GemmaModelRunner()
+        cfg_model, cfg_device = _read_config_model()
+        _GLOBAL_RUNNER = GemmaModelRunner(model_name=cfg_model, device=cfg_device)
     return _GLOBAL_RUNNER
 
 

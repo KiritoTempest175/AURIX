@@ -1,3 +1,5 @@
+param([int]$TimeoutSeconds = 15)
+
 # Windows Native Offline Speech-to-Text via System.Speech
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 try {
@@ -10,8 +12,8 @@ try {
     $dictation.Name = "Dictation"
     $rec.LoadGrammar($dictation)
 
-    # Listen for spoken phrase
-    $res = $rec.Recognize([TimeSpan]::FromSeconds(6))
+    # Listen for spoken phrase with expanded duration
+    $res = $rec.Recognize([TimeSpan]::FromSeconds($TimeoutSeconds))
     if ($res -and $res.Text -and ($res.Text.Trim().Length -gt 0)) {
         Write-Output "SPEECH_RESULT:$($res.Text.Trim())"
     } else {

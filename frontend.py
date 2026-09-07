@@ -555,7 +555,37 @@ class JarvisApp(tk.Tk):
         send_btn.pack(side="left", padx=(8, 0))
         send_btn.bind("<Button-1>", self._send_command)
 
-        self._append_terminal_line("AURIX is online and ready.", "dim")
+        self._play_welcome_call()
+
+    def _play_welcome_call(self):
+        config_path = os.path.join(ROOT_DIR, "welcome_config.json")
+        welcome_text = "AURIX is online and ready."
+        try:
+            import json
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    greeting = data.get("greeting", "Greetings")
+                    name = data.get("name", "Creator")
+                    message = data.get("message", "AURIX is online and ready for your command.")
+                    welcome_text = f"{greeting} {name}. {message}"
+        except Exception as e:
+            logger.warning("Failed to load welcome config: %s", e)
+
+        self._append_terminal_line(welcome_text, "dim")
+
+        if HAS_AUDIO:
+            def speak_worker():
+                if self.state_machine:
+                    self.state_machine.transition_to(AssistantState.SPEAKING)
+                try:
+                    speak(welcome_text, interruptible=False)
+                finally:
+                    if self.state_machine:
+                        self.state_machine.transition_to(AssistantState.SLEEPING)
+                    if self.wakeword:
+                        self.wakeword.resume_listening()
+            threading.Thread(target=speak_worker, daemon=True, name="AurixWelcomeTTS").start()
 
     # ── Mic Toggle → Trigger Voice Pipeline ──────────────────────────
     def _toggle_mic(self, event=None):
@@ -717,12 +747,13 @@ class JarvisApp(tk.Tk):
                 os.makedirs(audio_dir, exist_ok=True)
                 wav_path = os.path.join(audio_dir, "input.wav")
 
-                # 2. Record with silence cutoff
+                # 2. Record with adaptive silence cutoff (2.2s silence limit, 10s initial timeout)
                 rec = record_audio(
                     filename=wav_path,
                     sample_rate=16000,
-                    silence_limit=1.2,
-                    initial_timeout=8.0,
+                    silence_limit=2.2,
+                    initial_timeout=10.0,
+                    min_speech_duration=0.8,
                 )
 
                 if not rec:

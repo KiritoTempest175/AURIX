@@ -171,9 +171,10 @@ from native_ui.audio.stt import transcribe_audio
 def record_audio(
     filename: str = "input.wav",
     sample_rate: int = 16000,
-    silence_limit: float = 1.2,
-    initial_timeout: float = 6.0,
-    max_record_time: float = 30.0,
+    silence_limit: float = 2.2,
+    initial_timeout: float = 10.0,
+    max_record_time: float = 35.0,
+    min_speech_duration: float = 0.8,
     on_status: Optional[Callable[[str], None]] = None,
 ) -> Optional[str]:
     """Dynamically listens and records speech:
@@ -182,6 +183,8 @@ def record_audio(
     - Waits for speech to start (up to initial_timeout seconds).
     - Preserves 600ms pre-roll audio buffer so initial phonemes are never clipped.
     - Continuously records as long as user is speaking.
+    - Enforces min_speech_duration so brief pauses/words don't trigger early cutoff.
+    - Trims excess trailing silence upon completion to eliminate STT delay.
     - When user stops speaking and `silence_limit` seconds of silence is observed, stops and saves.
     - If user did not speak at all within timeout, returns None.
     """
@@ -197,7 +200,7 @@ def record_audio(
             pass
 
     chunk_size = int(sample_rate * 0.1)  # 100ms per block
-    silence_chunks_needed = max(8, int(silence_limit / 0.1))
+    silence_chunks_needed = max(12, int(silence_limit / 0.1))
     timeout_chunks = int(initial_timeout / 0.1)
 
     pre_buffer = collections.deque(maxlen=6)  # 600ms pre-roll
@@ -224,13 +227,13 @@ def record_audio(
             # Clamp floor to reasonable bounds (10.0 to 80.0)
             ambient_floor = max(10.0, min(80.0, ambient_floor))
 
-            # Speech onset thresholds: adaptive to room noise
-            onset_rms = max(25.0, ambient_floor * 1.5)
-            onset_peak = max(220.0, ambient_floor * 4.0)
+            # Speech onset thresholds: adaptive to room noise with hysteresis
+            onset_rms = max(26.0, ambient_floor * 1.55)
+            onset_peak = max(220.0, ambient_floor * 3.6)
 
             # Silence cutoff threshold
-            cutoff_rms = max(18.0, ambient_floor * 1.25)
-            cutoff_peak = max(160.0, ambient_floor * 2.5)
+            cutoff_rms = max(16.0, ambient_floor * 1.20)
+            cutoff_peak = max(140.0, ambient_floor * 2.2)
 
             logger.debug(
                 f"Audio calibrated: ambient_floor={ambient_floor:.1f}, "
@@ -266,17 +269,26 @@ def record_audio(
                     # Active recording mode
                     recorded_chunks.append(chunk)
 
+                    # Compute active speech duration (excluding pre-roll)
+                    active_speech_chunks = max(0, len(recorded_chunks) - len(pre_buffer))
+                    active_speech_secs = active_speech_chunks * 0.1
+
                     if rms < cutoff_rms and max_val < cutoff_peak:
-                        consecutive_silence += 1
-                        if consecutive_silence >= silence_chunks_needed:
-                            # User finished speaking
-                            logger.info(f"Speech finished after {len(recorded_chunks) * 0.1:.1f}s.")
-                            break
+                        # Only count silence if user has spoken minimum required phrase duration
+                        if active_speech_secs >= min_speech_duration:
+                            consecutive_silence += 1
+                            if consecutive_silence >= silence_chunks_needed:
+                                # User finished speaking complete sentence
+                                logger.info(f"Speech finished after {len(recorded_chunks) * 0.1:.1f}s.")
+                                break
+                        else:
+                            consecutive_silence = 0
                     else:
                         consecutive_silence = 0
 
                     # Safety maximum duration
                     if total_chunks * 0.1 >= max_record_time:
+                        logger.info("Reached maximum record duration limit.")
                         break
 
     except Exception as e:
@@ -286,6 +298,11 @@ def record_audio(
 
     if not recorded_chunks:
         return None
+
+    # Trim trailing silence down to 300ms so STT does not process dead silence
+    trim_chunks = max(0, consecutive_silence - 3)
+    if trim_chunks > 0 and len(recorded_chunks) > (trim_chunks + len(pre_buffer)):
+        recorded_chunks = recorded_chunks[:-trim_chunks]
 
     audio_array = np.concatenate(recorded_chunks, axis=0)
 
@@ -300,7 +317,7 @@ def record_audio(
             wf.setframerate(sample_rate)
             wf.writeframes(audio_array.tobytes())
 
-    logger.info(f"🎤 [Luna] Recording complete: saved to {filename}")
+    logger.info(f"🎤 [Luna] Recording complete ({len(audio_array)/sample_rate:.1f}s): saved to {filename}")
     return filename
 
 
@@ -311,6 +328,8 @@ def record_audio(
 def _speak_windows_sapi_female(text: str) -> bool:
     """Fallback female voice synthesizer using Windows SAPI5 (Microsoft Zira / Hazel / female)."""
     try:
+        # Sanitize text
+        clean_text = text.replace("'", "''").replace("\r", " ").replace("\n", " ").strip()
         ps_script = f"""
 Add-Type -AssemblyName System.Speech
 $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
@@ -318,12 +337,12 @@ $female = $synth.GetInstalledVoices() | Where-Object {{ $_.VoiceInfo.Gender -eq 
 if ($female) {{
     $synth.SelectVoice($female.VoiceInfo.Name)
 }}
-$synth.Speak('{text.replace("'", "''")}')
+$synth.Speak('{clean_text}')
 """
         res = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+            ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
             capture_output=True,
-            timeout=30,
+            timeout=15,
         )
         return res.returncode == 0
     except Exception as e:

@@ -18,6 +18,10 @@ whisper_model_path = "models/whisper/ggml-base.en.bin"
 whisper_language = "en"
 whisper_threads = 4
 whisper_sample_rate = 16000
+silence_limit = 2.2
+initial_timeout = 10.0
+min_speech_duration = 0.8
+max_record_time = 35.0
 voice = "Default"
 piper_model_path = "models/piper/en_US-lessac-medium.onnx"
 piper_config_path = "models/piper/en_US-lessac-medium.onnx.json"
@@ -40,9 +44,9 @@ log_level = "info"
 log_file = "logs/aurix_session.log"
 
 [llm]
-model_name = "google/gemma-4-E4B-it"
-model_alias = "Gemma 3n E4B"
-effective_params = "E4B"
+model_name = "Qwen/Qwen2.5-Coder-3B-Instruct"
+model_alias = "Qwen 2.5 Coder 3B (4-bit NF4 GPU)"
+effective_params = "3B"
 max_seq_length = 2048
 load_in_4bit = true
 quantization = "nf4"
