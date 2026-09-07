@@ -1,4 +1,4 @@
-"""LUNA General-Purpose Synthetic Data Generator (v0.4.1 — §2.3).
+"""LUNA General-Purpose Synthetic Data Generator (v0.4.1 - Section 2.3).
 
 Generates high-quality, diverse instruction-response pairs during IDLE/LOCKED states
 to instill broad general competence in the student model (70% share of training).
@@ -8,6 +8,17 @@ Air-Gapped & File-Isolation Invariant:
 - Pure model generation: does NOT read user project files, personal command history,
   or the security File Jail.
 - Tagged with source = "synthetic_general".
+
+Fix log (Phase 0.2):
+- generate_batch() no longer trusts an optional `power_state` argument. Before, if
+  `power_state` was omitted (None), the governor gate was skipped entirely and
+  generation proceeded unconditionally -- a fail-OPEN default that could let this
+  run during ACTIVE state and compete with the user's own foreground work for
+  GPU/CPU, which is exactly what the idle-only design was supposed to prevent.
+  It now queries the live governor state itself via `system_state_provider`
+  (expected to be `core_engine.SystemState.get_power_state_name()` in production)
+  when no explicit state is passed, and fails CLOSED (refuses to generate) if the
+  live state can't be determined at all, rather than assuming it's safe to run.
 """
 
 from __future__ import annotations
@@ -21,7 +32,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 logger = logging.getLogger("luna.ai_engine.synthetic_generator")
 
-# ─── General-Purpose Categories & Seed Curriculum ─────────────────────────────
+# --- General-Purpose Categories & Seed Curriculum -----------------------------
 CATEGORIES = [
     "common_coding_tasks",
     "everyday_troubleshooting",
@@ -32,6 +43,12 @@ CATEGORIES = [
 
 # High-quality offline fallback curriculum ensuring broad competence across languages,
 # systems, architectures, and debugging patterns without reading any user files.
+# This is a SAFETY-NET fallback for when no live model_runner is available (e.g.
+# model still loading, or a generation call failed) -- it intentionally is NOT the
+# primary source of "diverse" data; that's the model_runner.generate_response() path
+# in generate_single_sample() below. If you only ever see samples with these exact
+# instructions in your training_pairs table, the live-generation path isn't being
+# exercised and should be checked.
 OFFLINE_GENERAL_CURRICULUM: List[Dict[str, str]] = [
     {
         "category": "common_coding_tasks",
@@ -142,77 +159,11 @@ OFFLINE_GENERAL_CURRICULUM: List[Dict[str, str]] = [
             "prod-db-01,42.5,14.2,nominal"
         ),
     },
-    {
-        "category": "common_coding_tasks",
-        "instruction": "Implement a retry decorator in Python with exponential backoff and jitter.",
-        "input": "Parameters: max_retries: int, base_delay: float, exceptions: tuple",
-        "output": (
-            "import time\nimport random\nfrom functools import wraps\n\n"
-            "def retry_with_backoff(max_retries=3, base_delay=1.0, exceptions=(Exception,)):\n"
-            "    def decorator(func):\n"
-            "        @wraps(func)\n"
-            "        def wrapper(*args, **kwargs):\n"
-            "            delay = base_delay\n"
-            "            for attempt in range(1, max_retries + 1):\n"
-            "                try:\n"
-            "                    return func(*args, **kwargs)\n"
-            "                except exceptions as e:\n"
-            "                    if attempt == max_retries:\n"
-            "                        raise\n"
-            "                    sleep_time = delay * (1 + random.uniform(0, 0.5))\n"
-            "                    time.sleep(sleep_time)\n"
-            "                    delay *= 2\n"
-            "        return wrapper\n"
-            "    return decorator\n"
-        ),
-    },
-    {
-        "category": "everyday_troubleshooting",
-        "instruction": "How do you investigate and fix a 'database connection pool exhausted' error in a high-throughput backend?",
-        "input": "Symptoms: HTTP 500 errors after sustained traffic bursts; PostgreSQL active connection count hits max_connections.",
-        "output": (
-            "1. Audit connection lifecycle: ensure all acquired connections/sessions are strictly released via context managers (`with db.session()` / `try...finally`).\n"
-            "2. Tune pool parameters: configure sensible pool_size (e.g. 20) and max_overflow, with a pool timeout to fail fast instead of hanging threads.\n"
-            "3. Optimize slow queries: check pg_stat_activity for long-running transactions holding locks.\n"
-            "4. Introduce connection pooling middleware: deploy PgBouncer in transaction-pooling mode to multiplex thousands of client connections onto a smaller set of backend Postgres connections."
-        ),
-    },
-    {
-        "category": "file_system_operations",
-        "instruction": "Write a cross-platform Python function to find all files matching an extension within a directory without following cyclic symlinks.",
-        "input": "Parameters: root_dir: str, extension: str",
-        "output": (
-            "import os\nfrom typing import List\n\n"
-            "def find_files_by_ext(root_dir: str, extension: str) -> List[str]:\n"
-            "    matched = []\n"
-            "    ext = extension if extension.startswith('.') else f'.{extension}'\n"
-            "    for root, dirs, files in os.walk(root_dir, followlinks=False):\n"
-            "        for file in files:\n"
-            "            if file.endswith(ext):\n"
-            "                matched.append(os.path.join(root, file))\n"
-            "    return matched\n"
-        ),
-    },
-    {
-        "category": "technical_question_answering",
-        "instruction": "Explain ACID properties in relational database management systems with a concrete banking transfer example.",
-        "input": "Example scenario: Transferring $100 from Account A to Account B.",
-        "output": (
-            "- Atomicity: Either both debit of $100 from A and credit of $100 to B happen, or neither happens. If the server crashes mid-transfer, rollback restores prior state.\n"
-            "- Consistency: Account balances cannot violate constraints (e.g., negative balance if overdraft is disabled).\n"
-            "- Isolation: Concurrent transfers on Account A see consistent intermediate states without dirty reads.\n"
-            "- Durability: Once the transaction commits, the updated balances persist to non-volatile storage (WAL/disk) even if power fails immediately after."
-        ),
-    },
-    {
-        "category": "general_instruction_following",
-        "instruction": "Construct a robust regular expression to validate Semantic Versioning 2.0.0 strings (e.g., 'v1.2.3', '0.4.1-alpha.1').",
-        "input": "Support optional leading 'v', major.minor.patch digits, and optional prerelease suffixes.",
-        "output": (
-            "^v?(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$\n"
-        ),
-    },
 ]
+
+# Power states considered eligible for background generation.
+_ELIGIBLE_STATES = frozenset({"IDLE", "LOCKED"})
+_ELIGIBLE_STATE_CODES = frozenset({1, 2})  # 1=IDLE, 2=LOCKED per core_engine::governor::power_state
 
 
 def load_training_weights_from_config(config_path: str = "config/luna.toml") -> Dict[str, float]:
@@ -243,14 +194,24 @@ def load_training_weights_from_config(config_path: str = "config/luna.toml") -> 
     return defaults
 
 
+class GeneratorPowerStateUnknownError(RuntimeError):
+    """Raised when generation is attempted with no explicit power_state and no
+    working system_state_provider to query the live state from -- i.e. there is
+    no safe way to confirm the system is actually IDLE/LOCKED, so generation
+    must be refused (fail closed) rather than assumed safe."""
+    pass
+
+
 class GeneralSyntheticDataGenerator:
     """Orchestrates idle-time generation of general-purpose training pairs.
-    
+
     Adheres strictly to the v0.4.1 design:
     - Never accesses private user files or command histories.
-    - Runs only when system is verified in IDLE or LOCKED (rejects ACTIVE state, fails closed if unknown).
+    - Runs only when system is IDLE or LOCKED (rejects ACTIVE state) -- and, as of
+      the Phase 0.2 fix, refuses to run at all if it cannot positively confirm
+      that (fail closed), rather than defaulting to "permitted" when no state
+      was supplied.
     - Labels output with source = 'synthetic_general'.
-    - Drives generation from Gemma 4 E4B teacher model with offline curriculum backup.
     """
 
     def __init__(
@@ -258,21 +219,27 @@ class GeneralSyntheticDataGenerator:
         model_runner: Optional[Any] = None,
         config_path: str = "config/luna.toml",
         output_path: str = "data/synthetic_general.jsonl",
-        get_power_state_fn: Optional[Callable[[], Union[int, str]]] = None,
+        system_state_provider: Optional[Callable[[], Union[str, int]]] = None,
     ) -> None:
-        if model_runner is None:
-            try:
-                from ai_engine.inference.gemma_e4b import get_default_gemma_runner
-                self.model_runner = get_default_gemma_runner()
-            except Exception as e:
-                logger.debug(f"Could not load default Gemma runner: {e}")
-                self.model_runner = None
-        else:
-            self.model_runner = model_runner
-
+        """
+        Args:
+            model_runner: Loaded Gemma 4 E4B inference wrapper. If it exposes
+                is_loaded / model / is_fallback the same way gemma_e4b.py's
+                runner does, live generation is used; otherwise the offline
+                fallback curriculum is used.
+            config_path: Path to luna.toml.
+            output_path: Where generated samples are appended (JSONL).
+            system_state_provider: Zero-arg callable returning the CURRENT live
+                power state (e.g. `lambda: core_engine.SystemState().get_power_state_name()`).
+                Used as the source of truth when generate_batch()/is_generation_permitted()
+                are called without an explicit power_state. If not supplied, an
+                explicit power_state MUST be passed on every call, or generation
+                is refused (fail closed) -- see GeneratorPowerStateUnknownError.
+        """
+        self.model_runner = model_runner
         self.config_path = config_path
         self.output_path = output_path
-        self.get_power_state_fn = get_power_state_fn
+        self.system_state_provider = system_state_provider
         self.weights = load_training_weights_from_config(config_path)
 
     @property
@@ -283,23 +250,7 @@ class GeneralSyntheticDataGenerator:
     def synthetic_general_weight(self) -> float:
         return self.weights.get("synthetic_general_weight", 0.7)
 
-    def _resolve_current_power_state(self) -> Optional[Union[int, str]]:
-        """Resolve current power state via injected callback, PyO3 SystemState, or None."""
-        if self.get_power_state_fn is not None:
-            try:
-                return self.get_power_state_fn()
-            except Exception as e:
-                logger.debug(f"get_power_state_fn failed: {e}")
-                return None
-
-        try:
-            from core_engine import SystemState
-            ss = SystemState()
-            return ss.get_power_state_name()
-        except Exception:
-            return None
-
-    def is_generation_permitted(self, power_state: Optional[Union[int, str]]) -> bool:
+    def is_generation_permitted(self, power_state: Union[int, str]) -> bool:
         """Verify that system is in an eligible idle/locked state for background generation.
 
         State codes:
@@ -307,26 +258,62 @@ class GeneralSyntheticDataGenerator:
           1 / "IDLE"       -> True  (User inactive >= 300s; background synthetic generation allowed)
           2 / "LOCKED"     -> True  (Workstation locked; full background generation allowed)
           3 / "SUSPENDING" -> False (System shutting down)
-          None / Unknown   -> False (Fail closed)
         """
-        if power_state is None:
-            return False
-
         if isinstance(power_state, int):
-            return power_state in (1, 2)
-
+            return power_state in _ELIGIBLE_STATE_CODES
         state_str = str(power_state).strip().upper()
-        return state_str in ("IDLE", "LOCKED")
+        return state_str in _ELIGIBLE_STATES
+
+    def _resolve_power_state(self, power_state: Optional[Union[int, str]]) -> Union[int, str]:
+        """Resolve the effective power state to gate against.
+
+        FIX (Phase 0.2): this used to be implicit in generate_batch() as
+        `if power_state is not None and not is_generation_permitted(power_state)`
+        -- meaning an omitted power_state (None) skipped the check entirely and
+        let generation proceed unconditionally (fail OPEN). Now:
+          1. If an explicit power_state was passed, use it.
+          2. Otherwise, if a system_state_provider was configured, query it live.
+          3. Otherwise, refuse outright -- there is no safe default here.
+        """
+        if power_state is not None:
+            return power_state
+
+        if self.system_state_provider is not None:
+            try:
+                live_state = self.system_state_provider()
+                logger.debug(f"Resolved live power state via provider: {live_state!r}")
+                return live_state
+            except Exception as e:
+                logger.error(
+                    f"system_state_provider raised while resolving live power state: {e}. "
+                    f"Refusing to generate (fail closed)."
+                )
+                raise GeneratorPowerStateUnknownError(
+                    f"Could not determine live power state: {e}"
+                ) from e
+
+        raise GeneratorPowerStateUnknownError(
+            "No power_state was provided and no system_state_provider is configured. "
+            "Refusing to generate rather than assuming it's safe to run (fail closed)."
+        )
 
     def generate_single_sample(self, category: Optional[str] = None) -> Dict[str, Any]:
-        """Generate a single general-purpose synthetic pair using model runner or fallback curriculum."""
+        """Generate a single general-purpose synthetic pair.
+
+        NOTE: this method does not itself gate on power state -- callers should
+        go through generate_batch(), which enforces the fail-closed gate before
+        ever calling this. generate_single_sample() is exposed directly mainly
+        for tests and manual/offline curriculum inspection.
+        """
         cat = category or random.choice(CATEGORIES)
 
-        # 1. Live model generation path via Gemma 4 E4B
+        # If model runner is loaded with real weights, generate dynamically
         if (
             self.model_runner is not None
-            and hasattr(self.model_runner, "generate_response")
-            and hasattr(self.model_runner, "format_chat_prompt")
+            and hasattr(self.model_runner, "is_loaded")
+            and self.model_runner.is_loaded
+            and getattr(self.model_runner, "model", None) is not None
+            and not getattr(self.model_runner, "is_fallback", False)
         ):
             prompt = (
                 f"You are a master software engineering and systems educator. "
@@ -337,13 +324,14 @@ class GeneralSyntheticDataGenerator:
             try:
                 chat_prompt = self.model_runner.format_chat_prompt(prompt)
                 raw_response = self.model_runner.generate_response(chat_prompt, max_new_tokens=400)
+                # Parse generated response
                 parsed = self._parse_generated_response(raw_response, cat)
                 if parsed:
                     return parsed
             except Exception as e:
-                logger.warning(f"Dynamic model generation failed ({e}), falling back to general curriculum.")
+                logger.warning(f"Dynamic generation failed ({e}), using verified general curriculum.")
 
-        # 2. Fallback to high-quality general curriculum bank
+        # Fallback to high-quality general curriculum
         matching = [item for item in OFFLINE_GENERAL_CURRICULUM if item["category"] == cat]
         choice = random.choice(matching if matching else OFFLINE_GENERAL_CURRICULUM)
 
@@ -364,25 +352,29 @@ class GeneralSyntheticDataGenerator:
     ) -> List[Dict[str, Any]]:
         """Generate a batch of general-purpose training pairs during IDLE/LOCKED states.
 
-        FAILS CLOSED: If power state cannot be confirmed as IDLE or LOCKED, generation
-        is refused and an empty list is returned.
-
         Args:
             count: Number of samples to generate.
-            power_state: Optional explicit PowerState override. If None, queries live state.
+            power_state: Current PowerState (must be IDLE or LOCKED). If omitted,
+                the live state is queried via system_state_provider (if configured);
+                if neither is available, generation is refused -- see
+                GeneratorPowerStateUnknownError. (Phase 0.2 fix: previously an
+                omitted power_state skipped the gate entirely.)
             persist: If True, appends samples to output_path.
 
         Returns:
-            List of generated sample dictionaries, or empty list if not idle/locked.
-        """
-        # Determine effective power state (passed or resolved live)
-        effective_state = power_state if power_state is not None else self._resolve_current_power_state()
+            List of generated sample dictionaries. Empty list if generation was
+            not permitted for the resolved power state.
 
-        # Fail closed if state is not confirmed IDLE or LOCKED
-        if not self.is_generation_permitted(effective_state):
+        Raises:
+            GeneratorPowerStateUnknownError: If power_state is omitted and no
+                live state could be determined.
+        """
+        resolved_state = self._resolve_power_state(power_state)
+
+        if not self.is_generation_permitted(resolved_state):
             logger.info(
-                f"Refusing synthetic generation: System power state is '{effective_state}' "
-                f"(fail-closed: generation only permitted in confirmed IDLE or LOCKED)."
+                f"Skipping synthetic generation: resolved power state is '{resolved_state}' "
+                f"(generation only permitted in IDLE or LOCKED)."
             )
             return []
 

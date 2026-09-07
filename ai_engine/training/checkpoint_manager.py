@@ -2,6 +2,15 @@
 
 Implements atomic, encrypted checkpoint persistence and rollback for Luna-Student-5B
 during training, idle-lock, and OS shutdown/hibernation events.
+
+Fix log (Phase 0.1):
+- _load_and_verify_dir() now wraps training_state.json decryption/parsing in a
+  try/except and re-raises as ValueError, so a corrupted extra-state file fails
+  with the same exception type the rest of this module's error contract expects,
+  instead of leaking whatever exception type the encryption library happens to use.
+- Removed the unreachable `if result is None` branch in load_checkpoint() —
+  _load_and_verify_dir() always either returns a tuple or raises, it never
+  returns None, so that check could never fire.
 """
 
 from __future__ import annotations
@@ -222,19 +231,27 @@ class CheckpointManager:
                 f"Checkpoint '{checkpoint_id}' not found in {self.checkpoint_dir}"
             )
 
-        result = self._load_and_verify_dir(ckpt_dir)
-        if result is None:
-            raise ValueError(f"Failed to load checkpoint '{checkpoint_id}'")
-
-        _, manifest, _ = result
+        # NOTE (fix, Phase 0.1): _load_and_verify_dir() never returns None — it
+        # either returns a valid tuple or raises (FileNotFoundError/ValueError).
+        # The old `if result is None: raise ValueError(...)` guard here was
+        # therefore dead code and has been removed. Any failure now propagates
+        # naturally as the exception _load_and_verify_dir() actually raises.
+        _, manifest, _ = result = self._load_and_verify_dir(ckpt_dir)
         self._update_pointer_atomic(manifest)
         logger.info(f"Successfully restored checkpoint '{checkpoint_id}' and updated pointer.")
         return result
 
     def _load_and_verify_dir(
         self, ckpt_dir: Path
-    ) -> Optional[Tuple[bytes, CheckpointManifest, Optional[Dict[str, Any]]]]:
-        """Verify hash, decrypt weights, and load extra_state from checkpoint directory."""
+    ) -> Tuple[bytes, CheckpointManifest, Optional[Dict[str, Any]]]:
+        """Verify hash, decrypt weights, and load extra_state from checkpoint directory.
+
+        Raises:
+            FileNotFoundError: If the checkpoint directory doesn't exist.
+            ValueError: If manifest/weights are missing, the weights integrity check
+                fails, or the (optional) training_state.json is present but corrupt
+                / fails to decrypt.
+        """
         if not ckpt_dir.exists():
             raise FileNotFoundError(f"Checkpoint directory {ckpt_dir} does not exist")
 
@@ -261,15 +278,31 @@ class CheckpointManager:
         else:
             weights = raw_payload
 
-        # Load extra state (optimizer/RNG) if present
+        # Load extra state (optimizer/RNG) if present.
+        #
+        # FIX (Phase 0.1): this block used to call decrypt_json()/json.loads()
+        # with no try/except. If training_state.json existed but was corrupt
+        # (bad AEAD tag, truncated write, wrong key), whatever exception type
+        # the encryption library raises would propagate unchanged — which could
+        # be anything, not necessarily ValueError — breaking the "this method
+        # raises ValueError on corruption" contract that load_checkpoint() and
+        # load_latest_checkpoint()'s rollback logic both rely on. It also meant
+        # a corrupted *extra_state* file (optimizer/RNG state only) could take
+        # down an otherwise perfectly good checkpoint's *weights*, forcing an
+        # unnecessary full rollback. Now explicitly caught and normalized.
         extra_state: Optional[Dict[str, Any]] = None
         state_file = ckpt_dir / "training_state.json"
         if state_file.exists():
-            if manifest.is_encrypted:
-                enc_state = state_file.read_text(encoding="utf-8")
-                extra_state = self.encryptor.decrypt_json(enc_state)
-            else:
-                extra_state = json.loads(state_file.read_text(encoding="utf-8"))
+            try:
+                if manifest.is_encrypted:
+                    enc_state = state_file.read_text(encoding="utf-8")
+                    extra_state = self.encryptor.decrypt_json(enc_state)
+                else:
+                    extra_state = json.loads(state_file.read_text(encoding="utf-8"))
+            except Exception as e:
+                raise ValueError(
+                    f"Corrupted training_state.json in {ckpt_dir}: {e}"
+                ) from e
 
         return weights, manifest, extra_state
 
