@@ -42,7 +42,12 @@ except ImportError:
 
 
 def _read_config_model() -> tuple[str, str]:
-    """Read configured model_name and device from config.toml if present."""
+    """Read configured model_name and device from config.toml.
+
+    If model_name is set to "auto" (or absent), delegates to
+    model_resolver.resolve_best_model() which detects installed models
+    and auto-downloads Gemma 4 E4B if nothing is available.
+    """
     try:
         import tomllib
     except ImportError:
@@ -50,6 +55,10 @@ def _read_config_model() -> tuple[str, str]:
             import tomli as tomllib
         except ImportError:
             tomllib = None
+
+    config_model_name = None
+    config_device = "cuda"
+
     if tomllib:
         try:
             from pathlib import Path
@@ -58,10 +67,29 @@ def _read_config_model() -> tuple[str, str]:
                 with open(cfg_path, "rb") as f:
                     cfg = tomllib.load(f)
                 llm = cfg.get("llm", {})
-                return llm.get("model_name", "Qwen/Qwen2.5-Coder-3B-Instruct"), llm.get("device", "cuda")
+                config_model_name = llm.get("model_name")
+                config_device = llm.get("device", "cuda")
         except Exception:
             pass
-    return "Qwen/Qwen2.5-Coder-3B-Instruct", "cuda"
+
+    # Delegate to the model resolver for smart detection + auto-download
+    try:
+        from ai_engine.inference.model_resolver import resolve_best_model
+        _model_id, _resolved_path, _spec = resolve_best_model(
+            config_model_name=config_model_name,
+            auto_download=True,
+        )
+        logger.info(
+            "Model resolver selected: '%s' (%s, priority=%d)",
+            _spec.alias, _model_id, _spec.priority,
+        )
+        return _model_id, config_device
+    except Exception as resolver_err:
+        logger.warning("Model resolver failed (%s). Using direct config value.", resolver_err)
+
+    # Fallback: return whatever config says, or the primary model as default
+    from ai_engine.inference.model_resolver import PRIMARY_MODEL_ID
+    return config_model_name or PRIMARY_MODEL_ID, config_device
 
 
 def resolve_model_path(model_name_or_id: str) -> Optional[str]:
@@ -104,7 +132,7 @@ def resolve_model_path(model_name_or_id: str) -> Optional[str]:
 class GemmaModelRunner:
     """Orchestrates LLM reasoning model loading, GPU 4-bit scaling, and inference."""
 
-    DEFAULT_MODEL = "Qwen/Qwen2.5-Coder-3B-Instruct"
+    DEFAULT_MODEL = "google/gemma-4-E4B-it"
 
     def __init__(
         self,
@@ -179,12 +207,15 @@ class GemmaModelRunner:
         resolved_path = resolve_model_path(self.model_name)
         if not resolved_path:
             # Check fallback to any local candidate in cache
-            candidates = [
-                "Qwen/Qwen2.5-Coder-3B-Instruct",
-                "Qwen/Qwen2.5-3B-Instruct",
-                "Qwen/Qwen2.5-Coder-7B-Instruct",
-                "google/gemma-4-E4B-it",
-            ]
+            # Priority: Gemma 4 E4B (primary) > Qwen 2.5 3B (secondary)
+            try:
+                from ai_engine.inference.model_resolver import SUPPORTED_MODELS
+                candidates = [spec.model_id for spec in SUPPORTED_MODELS]
+            except ImportError:
+                candidates = [
+                    "google/gemma-4-E4B-it",
+                    "Qwen/Qwen2.5-Coder-3B-Instruct",
+                ]
             for cand in candidates:
                 cand_path = resolve_model_path(cand)
                 if cand_path:
@@ -250,7 +281,7 @@ class GemmaModelRunner:
                         target_path,
                         quantization_config=quant_config,
                         device_map="auto" if self.device == "cuda" else None,
-                        torch_dtype=model_dtype,
+                        dtype=model_dtype,
                         low_cpu_mem_usage=True,
                         local_files_only=local_only,
                     )
@@ -264,7 +295,7 @@ class GemmaModelRunner:
                             target_path,
                             quantization_config=quant_config,
                             device_map="auto" if self.device == "cuda" else None,
-                            torch_dtype=model_dtype,
+                            dtype=model_dtype,
                             low_cpu_mem_usage=True,
                             local_files_only=local_only,
                         )

@@ -44,9 +44,12 @@ log_level = "info"
 log_file = "logs/aurix_session.log"
 
 [llm]
-model_name = "Qwen/Qwen2.5-Coder-3B-Instruct"
-model_alias = "Qwen 2.5 Coder 3B (4-bit NF4 GPU)"
-effective_params = "3B"
+# Model selection: set to "auto" for automatic detection (Gemma 4 E4B primary,
+# Qwen 2.5 3B secondary), or specify a HuggingFace model ID to force a model.
+# If "auto" and no model is found locally, Gemma 4 E4B will be downloaded.
+model_name = "auto"
+model_alias = "Auto-Detected (Gemma 4 E4B / Qwen 2.5 3B)"
+effective_params = "auto"
 max_seq_length = 2048
 load_in_4bit = true
 quantization = "nf4"
