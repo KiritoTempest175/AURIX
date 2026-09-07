@@ -27,6 +27,7 @@ class ActionCategory(enum.Enum):
     LOCAL_SEARCH = "local_search"
     CHECKPOINT_RESTORE = "checkpoint_restore"
     SYSTEM_SETTING = "system_setting"
+    EXTERNAL_COMMUNICATION = "external_communication"
 
 
 @dataclass
@@ -83,10 +84,18 @@ class PermissionManager:
         logger.info(f"Issued Trust Token {token_id} for {category.value} on '{target_resource}'")
         return token
 
+    def grant_trust_token(self, category: ActionCategory, target_resource: str, user_id: str = "user_approved", ttl_seconds: float = 60.0) -> TrustToken:
+        """Issue and grant a Trust Token upon explicit human approval."""
+        return self.issue_trust_token(category, target_resource, ttl_seconds=ttl_seconds)
+
     def requires_trust_token(self, category: ActionCategory, target_resource: str, command_text: Optional[str] = None) -> bool:
         """Determine if an action requires explicit interactive human approval."""
         if category in self.HIGH_RISK_CATEGORIES:
             return True
+
+        if category == ActionCategory.EXTERNAL_COMMUNICATION:
+            perms = self.config.get("security", {}).get("permissions", {})
+            return perms.get("require_trust_token_for_comms", False)
 
         # Check shell exec destructive commands
         if category == ActionCategory.SHELL_EXEC and command_text:

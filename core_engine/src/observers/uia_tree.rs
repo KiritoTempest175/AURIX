@@ -190,3 +190,108 @@ impl Default for UIATreeObserver {
         Self::new()
     }
 }
+
+
+// ─── UiaController PyClass ───────────────────────────────────────────────────
+
+use uiautomation::UIElement;
+
+#[pyclass]
+#[derive(Clone)]
+pub struct UiaController {
+    _private: (),
+}
+
+impl UiaController {
+    fn _find_window(&self, title_substring: &str) -> Result<UIElement, String> {
+        let automation = UIAutomation::new().map_err(|e| e.to_string())?;
+        let root = automation.get_root_element().map_err(|e| e.to_string())?;
+        
+        let walker = automation.get_control_view_walker().map_err(|e| e.to_string())?;
+        let mut child = walker.get_first_child(&root);
+        
+        while let Ok(element) = child {
+            if let Ok(name) = element.get_name() {
+                if name.to_lowercase().contains(&title_substring.to_lowercase()) {
+                    return Ok(element);
+                }
+            }
+            child = walker.get_next_sibling(&element);
+        }
+        Err(format!("Window containing '{}' not found", title_substring))
+    }
+
+    fn _find_control(&self, window_title: &str, control_name: &str) -> Result<UIElement, String> {
+        let window = self._find_window(window_title)?;
+        let automation = UIAutomation::new().map_err(|e| e.to_string())?;
+        let condition = automation.create_property_condition(uiautomation::types::UIProperty::Name, control_name.into(), None).map_err(|e| e.to_string())?;
+        window.find_first(uiautomation::types::TreeScope::Subtree, &condition).map_err(|_| format!("Control not found"))
+    }
+}
+
+#[pymethods]
+impl UiaController {
+    #[new]
+    pub fn new() -> Self {
+        UiaController { _private: () }
+    }
+
+    pub fn find_window_by_title(&self, title_substring: &str) -> PyResult<bool> {
+        match self._find_window(title_substring) {
+            Ok(w) => {
+                let _ = w.set_focus();
+                Ok(true)
+            },
+            Err(_) => Ok(false)
+        }
+    }
+
+    pub fn find_control_by_name(&self, window_title: &str, control_name: &str) -> PyResult<bool> {
+        match self._find_control(window_title, control_name) {
+            Ok(_) => Ok(true),
+            Err(_) => Ok(false)
+        }
+    }
+
+    pub fn invoke_control(&self, window_title: &str, control_name: &str) -> PyResult<bool> {
+        match self._find_control(window_title, control_name) {
+            Ok(element) => {
+                if let Ok(invoke_pattern) = element.get_pattern::<uiautomation::patterns::UIInvokePattern>() {
+                    let _ = invoke_pattern.invoke();
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            },
+            Err(_) => Ok(false)
+        }
+    }
+
+    pub fn set_focus_and_type(&self, window_title: &str, control_name: &str, text: &str) -> PyResult<bool> {
+        match self._find_control(window_title, control_name) {
+            Ok(element) => {
+                let _ = element.set_focus();
+                if let Ok(value_pattern) = element.get_pattern::<uiautomation::patterns::UIValuePattern>() {
+                    let _ = value_pattern.set_value(text);
+                } else {
+                    // Fallback
+                }
+                Ok(true)
+            },
+            Err(_) => Ok(false)
+        }
+    }
+
+    pub fn send_enter_key(&self, window_title: &str) -> PyResult<bool> {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, VK_RETURN, KEYEVENTF_KEYUP};
+        if self.find_window_by_title(window_title).unwrap_or(false) {
+            unsafe {
+                keybd_event(VK_RETURN as u8, 0, 0, 0);
+                keybd_event(VK_RETURN as u8, 0, KEYEVENTF_KEYUP, 0);
+            }
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+}

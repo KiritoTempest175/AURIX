@@ -14,6 +14,7 @@ pub fn register_ffi_bindings(m: &PyModule) -> PyResult<()> {
     // Classes
     m.add_class::<governor::power_state::SystemState>()?;
     m.add_class::<observers::uia_tree::UIATreeObserver>()?;
+    m.add_class::<observers::uia_tree::UiaController>()?;
     m.add_class::<observers::terminal_hook::TerminalHook>()?;
 
     // Governor Functions

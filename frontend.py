@@ -104,6 +104,15 @@ except ImportError as e:
     logger.warning("Audio subsystem unavailable: %s", e)
     HAS_AUDIO = False
 
+# AI Brain — Central Intelligence Dispatcher (app control, shell exec, etc.)
+try:
+    from ai_brain import BrainDispatcher
+    HAS_BRAIN = True
+except ImportError as e:
+    logger.warning("AI Brain dispatcher unavailable: %s", e)
+    BrainDispatcher = None
+    HAS_BRAIN = False
+
 # Rust Core Engine (Power Governor, Hardware Monitor)
 try:
     import core_engine
@@ -260,6 +269,9 @@ class JarvisApp(tk.Tk):
         self._wakeword = None
         self._system_state = None
         self._backends_initialized = False
+
+        # ── AI Brain dispatcher (app control, shell exec, etc.) ───────
+        self._brain = BrainDispatcher() if HAS_BRAIN else None
 
         # Only init lightweight subsystems at startup (core_engine, wakeword)
         self._init_lightweight_backends()
@@ -626,51 +638,23 @@ class JarvisApp(tk.Tk):
         # Dispatch inference in background thread
         def generate_job():
             try:
-                trimmed = text.strip()
-                lower = trimmed.lower()
+                # Route through AI Brain dispatcher first
+                if self._brain:
+                    reply, handled = self._brain.dispatch(text)
+                    if handled:
+                        now_str = datetime.now().strftime("%H:%M:%S")
+                        self._response_queue.put((reply, now_str))
+                        return
 
-                # Built-in tool dispatch
-                if lower in ("notepad", "open notepad"):
-                    subprocess.Popen("notepad.exe")
-                    reply = "Launched Windows Notepad."
-                elif lower in ("calc", "calculator", "open calc"):
-                    subprocess.Popen("calc.exe")
-                    reply = "Launched Windows Calculator."
-                elif lower in ("explorer", "open explorer"):
-                    subprocess.Popen(["explorer.exe", "."])
-                    reply = "Opened File Explorer at current directory."
-                elif lower.startswith("cmd:") or lower.startswith("run:"):
-                    raw_cmd = trimmed.split(":", 1)[1].strip()
-                    res = subprocess.run(raw_cmd, shell=True, capture_output=True, text=True, errors="replace")
-                    out = (res.stdout or res.stderr or "Command executed successfully (exit code 0).").strip()
-                    reply = f"[Command Result (Exit {res.returncode})]:\n{out}"
-                elif lower.startswith("open "):
-                    target = trimmed[5:].strip()
-                    script = os.path.join(ROOT_DIR, "scripts", "launch_app.ps1")
-                    if os.path.isfile(script):
-                        result = subprocess.run(
-                            ["powershell", "-ExecutionPolicy", "Bypass", "-File", script, target],
-                            capture_output=True, text=True, errors="replace",
-                        )
-                        out = result.stdout.strip()
-                        if "NOT_FOUND" in out or result.returncode != 0:
-                            reply = f"Could not find application: {target}"
-                        else:
-                            reply = out or f"Launched {target}."
-                    else:
-                        reply = f"Launch script not found. Cannot open: {target}"
-                elif lower in ("luna", "hey luna", "aurix", "wake up", "call luna", "hello"):
-                    reply = "AURIX Executive online and listening. Ready for your command."
+                # Not a brain action — fall through to LLM
+                if self.gemma_runner and getattr(
+                    self.gemma_runner, "is_available",
+                    getattr(self.gemma_runner, "is_loaded", False),
+                ):
+                    prompt = self.gemma_runner.format_chat_prompt(user_message=text)
+                    reply = self.gemma_runner.generate_response(prompt)
                 else:
-                    # Primary: Gemma 3n E4B Foundation Engine
-                    if self.gemma_runner and getattr(
-                        self.gemma_runner, "is_available",
-                        getattr(self.gemma_runner, "is_loaded", False),
-                    ):
-                        prompt = self.gemma_runner.format_chat_prompt(user_message=text)
-                        reply = self.gemma_runner.generate_response(prompt)
-                    else:
-                        reply = "AURIX inference engine is standing by."
+                    reply = "AURIX inference engine is standing by."
             except Exception as err:
                 reply = f"[Error]: {err}"
 
@@ -693,6 +677,22 @@ class JarvisApp(tk.Tk):
         # AI inference responses → show in terminal
         while not self._response_queue.empty():
             reply_text, timestamp = self._response_queue.get_nowait()
+
+            if reply_text.startswith("TRUST_TOKEN_REQUIRED:"):
+                parts = reply_text.split(":", 2)
+                action = parts[1] if len(parts) > 1 else "unknown"
+                from tkinter import messagebox
+                if messagebox.askyesno("Trust Token Required", f"AURIX requests permission to execute an external high-risk action: {action}\n\nDo you want to allow this?", parent=self):
+                    if self._brain:
+                        # We execute it in a background thread to not freeze UI
+                        def _exec():
+                            result = self._brain.execute_trust_token(reply_text)
+                            self._response_queue.put((result, datetime.now().strftime("%H:%M:%S")))
+                        threading.Thread(target=_exec, daemon=True).start()
+                else:
+                    self._append_terminal_line("Action blocked by user.", "dim")
+                continue
+
             self._append_terminal_line(reply_text, "reply")
 
             # TTS: speak response aloud (non-blocking)

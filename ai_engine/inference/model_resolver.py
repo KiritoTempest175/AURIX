@@ -40,15 +40,15 @@ class ModelSpec:
 # Ordered by priority (index 0 = highest priority)
 SUPPORTED_MODELS: List[ModelSpec] = [
     ModelSpec(
-        model_id="google/gemma-4-E4B-it",
-        alias="Gemma 4 E4B Instruct (Primary)",
-        effective_params="E4B",
+        model_id="Qwen/Qwen2.5-Coder-3B-Instruct",
+        alias="Qwen 2.5 Coder 3B Instruct (Primary)",
+        effective_params="3B",
         priority=1,
     ),
     ModelSpec(
-        model_id="Qwen/Qwen2.5-Coder-3B-Instruct",
-        alias="Qwen 2.5 Coder 3B Instruct (Secondary)",
-        effective_params="3B",
+        model_id="google/gemma-4-E4B-it",
+        alias="Gemma 4 E4B Instruct (Secondary)",
+        effective_params="E4B",
         priority=2,
     ),
 ]
@@ -56,8 +56,8 @@ SUPPORTED_MODELS: List[ModelSpec] = [
 # Quick lookup by model_id
 _MODEL_REGISTRY: Dict[str, ModelSpec] = {m.model_id: m for m in SUPPORTED_MODELS}
 
-PRIMARY_MODEL_ID = SUPPORTED_MODELS[0].model_id   # "google/gemma-4-E4B-it"
-SECONDARY_MODEL_ID = SUPPORTED_MODELS[1].model_id  # "Qwen/Qwen2.5-Coder-3B-Instruct"
+PRIMARY_MODEL_ID = SUPPORTED_MODELS[0].model_id   # "Qwen/Qwen2.5-Coder-3B-Instruct"
+SECONDARY_MODEL_ID = SUPPORTED_MODELS[1].model_id  # "google/gemma-4-E4B-it"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -180,8 +180,19 @@ def detect_model(model_id: str) -> Optional[str]:
     return None
 
 
+def is_model_supported(path: str) -> bool:
+    """Verify if the model at path has an architecture recognized by transformers."""
+    try:
+        from transformers import AutoConfig
+        AutoConfig.from_pretrained(path, local_files_only=True)
+        return True
+    except Exception as e:
+        logger.warning("Model at '%s' cannot be loaded by installed transformers: %s", path, e)
+        return False
+
+
 def detect_available_models() -> Dict[str, str]:
-    """Scan for all supported models that are locally available.
+    """Scan for all supported models that are locally available and loadable.
 
     Returns:
         Dict mapping model_id → local_path for each model found.
@@ -189,7 +200,7 @@ def detect_available_models() -> Dict[str, str]:
     available = {}
     for spec in SUPPORTED_MODELS:
         path = detect_model(spec.model_id)
-        if path:
+        if path and is_model_supported(path):
             available[spec.model_id] = path
             logger.info(
                 "Detected locally available model: '%s' at '%s' (priority=%d)",

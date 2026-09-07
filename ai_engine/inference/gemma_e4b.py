@@ -132,7 +132,7 @@ def resolve_model_path(model_name_or_id: str) -> Optional[str]:
 class GemmaModelRunner:
     """Orchestrates LLM reasoning model loading, GPU 4-bit scaling, and inference."""
 
-    DEFAULT_MODEL = "google/gemma-4-E4B-it"
+    DEFAULT_MODEL = "Qwen/Qwen2.5-Coder-3B-Instruct"
 
     def __init__(
         self,
@@ -204,109 +204,106 @@ class GemmaModelRunner:
             logger.info("Forced fallback mode active. Operating in deterministic offline mode.")
             return
 
-        resolved_path = resolve_model_path(self.model_name)
-        if not resolved_path:
-            # Check fallback to any local candidate in cache
-            # Priority: Gemma 4 E4B (primary) > Qwen 2.5 3B (secondary)
-            try:
-                from ai_engine.inference.model_resolver import SUPPORTED_MODELS
-                candidates = [spec.model_id for spec in SUPPORTED_MODELS]
-            except ImportError:
-                candidates = [
-                    "google/gemma-4-E4B-it",
-                    "Qwen/Qwen2.5-Coder-3B-Instruct",
-                ]
-            for cand in candidates:
-                cand_path = resolve_model_path(cand)
-                if cand_path:
-                    logger.info(f"Preferred model '{self.model_name}' not found locally. Auto-selecting local cached model: '{cand}'")
-                    resolved_path = cand_path
-                    self.model_name = cand
-                    break
+        # Collect candidate model IDs to attempt loading in order
+        candidates_to_try = [self.model_name]
+        try:
+            from ai_engine.inference.model_resolver import SUPPORTED_MODELS
+            for spec in SUPPORTED_MODELS:
+                if spec.model_id not in candidates_to_try:
+                    candidates_to_try.append(spec.model_id)
+        except ImportError:
+            for fallback_id in ("Qwen/Qwen2.5-Coder-3B-Instruct", "google/gemma-4-E4B-it"):
+                if fallback_id not in candidates_to_try:
+                    candidates_to_try.append(fallback_id)
 
-        if not resolved_path:
-            if self.fallback_mode:
-                self.is_loaded = True
-                logger.info(
-                    "Local weights for '%s' not present in cache. Operating in deterministic offline fallback mode.",
-                    self.model_name,
-                )
-                return
-            target_path = self.model_name
-            local_only = False
-        else:
+        loaded = False
+        for model_id in candidates_to_try:
+            resolved_path = resolve_model_path(model_id)
+            if not resolved_path:
+                continue
+
             target_path = resolved_path
             local_only = True
-            logger.info("Found local model weights at '%s'. Initializing model...", target_path)
+            logger.info("Attempting to load model weights for '%s' from '%s'...", model_id, target_path)
 
-        try:
-            if UNSLOTH_AVAILABLE and self.device == "cuda":
-                logger.info(
-                    f"Loading model ({self.effective_params}) with Unsloth from '{target_path}' "
-                    f"in 4-bit {self.quantization.upper()}..."
-                )
-                self.model, self.tokenizer = FastLanguageModel.from_pretrained(
-                    model_name=target_path,
-                    max_seq_length=self.max_seq_length,
-                    load_in_4bit=self.load_in_4bit,
-                    fast_inference=True,
-                )
-                FastLanguageModel.for_inference(self.model)
-            else:
-                # GPU Tensor Core optimizations
-                if self.device == "cuda" and hasattr(torch, "backends"):
-                    if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
-                        torch.backends.cuda.matmul.allow_tf32 = True
-                    if hasattr(torch.backends, "cudnn"):
-                        torch.backends.cudnn.benchmark = True
+            try:
+                if UNSLOTH_AVAILABLE and self.device == "cuda":
+                    logger.info(
+                        f"Loading model ({self.effective_params}) with Unsloth from '{target_path}' "
+                        f"in 4-bit {self.quantization.upper()}..."
+                    )
+                    self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                        model_name=target_path,
+                        max_seq_length=self.max_seq_length,
+                        load_in_4bit=self.load_in_4bit,
+                        fast_inference=True,
+                    )
+                    FastLanguageModel.for_inference(self.model)
+                else:
+                    # GPU Tensor Core optimizations
+                    if self.device == "cuda" and hasattr(torch, "backends"):
+                        if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
+                            torch.backends.cuda.matmul.allow_tf32 = True
+                        if hasattr(torch.backends, "cudnn"):
+                            torch.backends.cudnn.benchmark = True
 
-                quant_config = None
-                if self.load_in_4bit and self.device == "cuda" and BitsAndBytesConfig:
-                    quant_config = BitsAndBytesConfig(
-                        load_in_4bit=True,
-                        bnb_4bit_quant_type=self.quantization,
-                        bnb_4bit_compute_dtype=torch.float16,
+                    quant_config = None
+                    if self.load_in_4bit and self.device == "cuda" and BitsAndBytesConfig:
+                        quant_config = BitsAndBytesConfig(
+                            load_in_4bit=True,
+                            bnb_4bit_quant_type=self.quantization,
+                            bnb_4bit_compute_dtype=torch.float16,
+                            llm_int8_enable_fp32_cpu_offload=True,
+                        )
+
+                    model_dtype = torch.float16 if self.device == "cuda" else (
+                        torch.bfloat16 if hasattr(torch, "bfloat16") else torch.float32
                     )
 
-                model_dtype = torch.float16 if self.device == "cuda" else (
-                    torch.bfloat16 if hasattr(torch, "bfloat16") else torch.float32
-                )
-
-                # 1. Primary: Load CausalLM (Qwen, Gemma-text, Phi, etc.)
-                try:
-                    logger.info("Loading tokenizer from '%s'...", target_path)
-                    self.tokenizer = AutoTokenizer.from_pretrained(target_path, local_files_only=local_only)
-                    logger.info("Loading model weights on device '%s' (dtype=%s, 4bit=%s)...", self.device, model_dtype, self.load_in_4bit)
-                    self.model = AutoModelForCausalLM.from_pretrained(
-                        target_path,
-                        quantization_config=quant_config,
-                        device_map="auto" if self.device == "cuda" else None,
-                        dtype=model_dtype,
-                        low_cpu_mem_usage=True,
-                        local_files_only=local_only,
-                    )
-                except Exception as causal_err:
-                    # 2. Fallback: Multimodal LM (e.g. Gemma 4 multimodal)
-                    if AutoModelForMultimodalLM and AutoProcessor:
-                        logger.info("CausalLM failed (%s). Trying AutoModelForMultimodalLM...", causal_err)
-                        self.processor = AutoProcessor.from_pretrained(target_path, local_files_only=local_only)
-                        self.tokenizer = getattr(self.processor, "tokenizer", self.processor)
-                        self.model = AutoModelForMultimodalLM.from_pretrained(
+                    # 1. Primary: Load CausalLM (Qwen, Gemma-text, Phi, etc.)
+                    try:
+                        logger.info("Loading tokenizer from '%s'...", target_path)
+                        self.tokenizer = AutoTokenizer.from_pretrained(target_path, local_files_only=local_only)
+                        logger.info("Loading model weights on device '%s' (dtype=%s, 4bit=%s)...", self.device, model_dtype, self.load_in_4bit)
+                        self.model = AutoModelForCausalLM.from_pretrained(
                             target_path,
                             quantization_config=quant_config,
                             device_map="auto" if self.device == "cuda" else None,
-                            dtype=model_dtype,
+                            torch_dtype=model_dtype,
                             low_cpu_mem_usage=True,
                             local_files_only=local_only,
                         )
-                    else:
-                        raise causal_err
+                    except Exception as causal_err:
+                        # 2. Fallback: Multimodal LM (e.g. Gemma 4 multimodal)
+                        if AutoModelForMultimodalLM and AutoProcessor:
+                            logger.info("CausalLM failed (%s). Trying AutoModelForMultimodalLM...", causal_err)
+                            self.processor = AutoProcessor.from_pretrained(target_path, local_files_only=local_only)
+                            self.tokenizer = getattr(self.processor, "tokenizer", self.processor)
+                            self.model = AutoModelForMultimodalLM.from_pretrained(
+                                target_path,
+                                quantization_config=quant_config,
+                                device_map="auto" if self.device == "cuda" else None,
+                                torch_dtype=model_dtype,
+                                low_cpu_mem_usage=True,
+                                local_files_only=local_only,
+                            )
+                        else:
+                            raise causal_err
 
-            self.is_loaded = True
-            vram_mb = (torch.cuda.memory_allocated(0) / (1024 * 1024)) if (torch and torch.cuda.is_available()) else 0
-            logger.info(f"AURIX Model successfully loaded on device '{self.device}' (GPU VRAM: {vram_mb:.1f} MB).")
-        except Exception as e:
-            logger.warning("Failed to load model weights (%s). Operating in deterministic reasoning mode.", e)
+                self.model_name = model_id
+                self.is_loaded = True
+                loaded = True
+                vram_mb = (torch.cuda.memory_allocated(0) / (1024 * 1024)) if (torch and torch.cuda.is_available()) else 0
+                logger.info(f"AURIX Model '{model_id}' successfully loaded on device '{self.device}' (GPU VRAM: {vram_mb:.1f} MB).")
+                break
+            except Exception as e:
+                logger.warning("Failed to load candidate model '%s' (%s). Trying next candidate...", model_id, e)
+                self.model = None
+                self.tokenizer = None
+                self.processor = None
+
+        if not loaded:
+            logger.warning("No local candidate models could be loaded. Operating in deterministic reasoning mode.")
             self.is_loaded = True
 
     def set_effective_parameters(self, mode: str) -> None:
@@ -412,6 +409,63 @@ class GemmaModelRunner:
         if len(self._history) > 20:
             self._history = self._history[-20:]
         return reply
+
+    def select_tool(self, text: str) -> dict:
+        import json
+        from ai_brain.tool_schema import TOOLS
+
+        sys_prompt = (
+            "You are a helpful assistant with access to the following tools.\n"
+            f"{json.dumps(TOOLS, indent=2)}\n"
+            "You must respond with ONLY a valid JSON object representing the tool to call. "
+            "Do not include any prose, explanations, or markdown formatting (like ```json).\n"
+            "Format: {\"tool\": \"<tool_name>\", \"args\": {\"<param>\": \"<value>\"}}"
+        )
+
+        # FIX: this was calling self.format_prompt(user_input=..., sys_prompt=...),
+        # which doesn't exist on this class. The real method is format_chat_prompt()
+        # with different parameter names.
+        prompt = self.format_chat_prompt(
+            user_message=text,
+            system_instruction=sys_prompt,
+            context_history=[],  # tool selection must not be biased by prior chat
+        )
+
+        # generate_response() unconditionally appends every call to self._history.
+        # Tool-selection round trips (the raw schema prompt + raw JSON reply) are
+        # not real conversation and must not leak into later chat prompts, so
+        # snapshot history here and restore it after, regardless of outcome.
+        saved_history = list(self._history)
+        raw_reply = ""
+        try:
+            for attempt in range(2):
+                raw_reply = self.generate_response(prompt, temperature=0.0, max_new_tokens=256)
+
+                clean_reply = raw_reply.strip()
+                if clean_reply.startswith("```json"):
+                    clean_reply = clean_reply[7:]
+                if clean_reply.startswith("```"):
+                    clean_reply = clean_reply[3:]
+                if clean_reply.endswith("```"):
+                    clean_reply = clean_reply[:-3]
+                clean_reply = clean_reply.strip()
+
+                try:
+                    result = json.loads(clean_reply)
+                    if "tool" in result:
+                        if "args" not in result:
+                            result["args"] = {}
+                        return result
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to parse tool selection JSON: {raw_reply}")
+
+                if attempt == 0:
+                    prompt += raw_reply + "\nYour last reply was not valid JSON. Reply with ONLY valid JSON."
+
+            return {"tool": "general_answer", "args": {"response": raw_reply}}
+        finally:
+            self._history = saved_history
+
 
     def _fallback_generate(self, prompt: str) -> str:
         """Deterministic offline fallback response generator."""
