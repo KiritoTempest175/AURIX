@@ -10,8 +10,15 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+
+# Ensure project root is in sys.path
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 logger = logging.getLogger("luna.ai_engine.gemma_e4b")
 
@@ -48,11 +55,12 @@ def _read_config_model() -> tuple[str, str]:
     model_resolver.resolve_best_model() which detects installed models
     and auto-downloads Gemma 4 E4B if nothing is available.
     """
-    try:
+    import sys
+    if sys.version_info >= (3, 11):
         import tomllib
-    except ImportError:
+    else:
         try:
-            import tomli as tomllib
+            import tomli as tomllib  # type: ignore
         except ImportError:
             tomllib = None
 
@@ -93,12 +101,21 @@ def _read_config_model() -> tuple[str, str]:
 
 
 def resolve_model_path(model_name_or_id: str) -> Optional[str]:
-    """Resolve local path for model weights from direct path, HF cache, or models directory."""
+    """Resolve local path or Ollama identifier for model weights."""
     if not model_name_or_id:
         return None
     # 1. Direct path exists
     if os.path.exists(model_name_or_id):
         return os.path.abspath(model_name_or_id)
+
+    # 2. Check model resolver (Ollama / HuggingFace cache / project dir)
+    try:
+        from ai_engine.inference.model_resolver import detect_model
+        resolved = detect_model(model_name_or_id)
+        if resolved:
+            return resolved
+    except Exception:
+        pass
 
     # 2. Check HuggingFace Hub cache (~/.cache/huggingface/hub/models--...)
     try:
@@ -132,7 +149,7 @@ def resolve_model_path(model_name_or_id: str) -> Optional[str]:
 class GemmaModelRunner:
     """Orchestrates LLM reasoning model loading, GPU 4-bit scaling, and inference."""
 
-    DEFAULT_MODEL = "Qwen/Qwen2.5-Coder-3B-Instruct"
+    DEFAULT_MODEL = "qwen2.5:3b-instruct"
 
     def __init__(
         self,
@@ -169,6 +186,7 @@ class GemmaModelRunner:
         self.fallback_mode = fallback_mode
         self.force_fallback = force_fallback
 
+        self.backend: str = "transformers"
         self.model: Optional[Any] = None
         self.tokenizer: Optional[Any] = None
         self.processor: Optional[Any] = None
@@ -184,7 +202,9 @@ class GemmaModelRunner:
 
     @property
     def has_weights(self) -> bool:
-        """Return True if real model weights and tokenizer are loaded in memory."""
+        """Return True if real model weights and tokenizer or Ollama backend are active."""
+        if getattr(self, "backend", None) == "ollama":
+            return self.is_loaded
         return self.model is not None and self.tokenizer is not None
 
     def clear_history(self) -> None:
@@ -212,7 +232,7 @@ class GemmaModelRunner:
                 if spec.model_id not in candidates_to_try:
                     candidates_to_try.append(spec.model_id)
         except ImportError:
-            for fallback_id in ("Qwen/Qwen2.5-Coder-3B-Instruct", "google/gemma-4-E4B-it"):
+            for fallback_id in ("qwen2.5:3b-instruct", "google/gemma-4-E4B-it", "Qwen/Qwen2.5-Coder-3B-Instruct"):
                 if fallback_id not in candidates_to_try:
                     candidates_to_try.append(fallback_id)
 
@@ -221,6 +241,21 @@ class GemmaModelRunner:
             resolved_path = resolve_model_path(model_id)
             if not resolved_path:
                 continue
+
+            # ── Ollama Backend ──────────────────────────────────────────
+            if resolved_path.startswith("ollama:"):
+                clean_name = resolved_path[len("ollama:"):]
+                logger.info("Connecting to local Ollama backend for '%s'...", clean_name)
+                if self._init_ollama(clean_name):
+                    self.model_name = clean_name
+                    self.backend = "ollama"
+                    self.is_loaded = True
+                    loaded = True
+                    logger.info("AURIX model '%s' successfully connected via local Ollama backend.", clean_name)
+                    break
+                else:
+                    logger.warning("Could not establish Ollama connection for '%s'. Trying next candidate...", clean_name)
+                    continue
 
             target_path = resolved_path
             local_only = True
@@ -357,6 +392,14 @@ class GemmaModelRunner:
             except Exception as e:
                 logger.debug(f"apply_chat_template fallback ({e})")
 
+        # Template format: ChatML for Ollama/Qwen, or Gemma turn tags
+        if getattr(self, "backend", None) == "ollama" and not self.tokenizer:
+            formatted = f"<|im_start|>system\n{sys_prompt}<|im_end|>\n"
+            for msg in effective_history:
+                formatted += f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>\n"
+            formatted += f"<|im_start|>user\n{grounded_user_content}<|im_end|>\n<|im_start|>assistant\n"
+            return formatted
+
         # Standard fallback template format for Gemma
         formatted = f"<start_of_turn>system\n{sys_prompt}<end_of_turn>\n"
         for msg in effective_history:
@@ -372,7 +415,14 @@ class GemmaModelRunner:
         top_p: float = 0.9,
     ) -> str:
         """Generate response given a formatted prompt."""
-        if not self.has_weights or not torch:
+        if getattr(self, "backend", None) == "ollama":
+            reply = self._generate_ollama(
+                prompt=prompt,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+            )
+        elif not self.has_weights or not torch:
             reply = self._fallback_generate(prompt)
         else:
             try:
@@ -466,6 +516,74 @@ class GemmaModelRunner:
         finally:
             self._history = saved_history
 
+
+    def _init_ollama(self, model_name: str) -> bool:
+        """Verify Ollama server is running and model is available, launching service if needed."""
+        import urllib.request
+        import json
+        import subprocess
+
+        for attempt in range(2):
+            try:
+                req = urllib.request.Request("http://localhost:11434/api/tags")
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    installed = [m.get("name", "").lower() for m in data.get("models", [])]
+                    clean_lower = model_name.lower()
+                    if any(clean_lower in m or m in clean_lower for m in installed) or len(installed) > 0:
+                        return True
+            except Exception:
+                if attempt == 0:
+                    try:
+                        logger.info("Ollama server not responding. Starting background 'ollama serve'...")
+                        subprocess.Popen(
+                            ["ollama", "serve"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                        )
+                        time.sleep(1.5)
+                    except Exception as e:
+                        logger.warning("Could not launch ollama serve: %s", e)
+                        break
+        return False
+
+    def _generate_ollama(
+        self,
+        prompt: str,
+        max_new_tokens: int = 256,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+    ) -> str:
+        """Send prompt to local Ollama REST API and extract generated text."""
+        import urllib.request
+        import json
+        import re
+
+        payload = {
+            "model": self.model_name,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": temperature,
+                "top_p": top_p,
+                "num_predict": max_new_tokens,
+            },
+        }
+        try:
+            req = urllib.request.Request(
+                "http://localhost:11434/api/generate",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+                reply = result.get("response", "").strip()
+                reply = re.sub(r"<think>[\s\S]*?</think>", "", reply).strip()
+                return reply
+        except Exception as e:
+            logger.error("Ollama generation failed (%s). Falling back.", e)
+            return self._fallback_generate(prompt)
 
     def _fallback_generate(self, prompt: str) -> str:
         """Deterministic offline fallback response generator."""

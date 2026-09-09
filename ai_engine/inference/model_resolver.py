@@ -1,12 +1,13 @@
 """AURIX Multi-Model Resolver — Automatic model detection, priority selection, and download.
 
-Detects which supported LLM models are available locally (HuggingFace cache or
-project models directory), selects the highest-priority model, and auto-downloads
-the primary model (Gemma 4 E4B) if no supported models are found.
+Detects which supported LLM models are available locally (Ollama local models,
+HuggingFace cache, or project models directory), selects the highest-priority model,
+and auto-downloads or pulls if no supported models are found.
 
 Supported models (priority order):
-    1. google/gemma-4-E4B-it    — Primary   (used by default)
-    2. Qwen/Qwen2.5-Coder-3B-Instruct — Secondary (friend's model)
+    1. qwen2.5:3b-instruct            — Primary   (Ollama, optimized for CPU & low RAM)
+    2. google/gemma-4-E4B-it          — Secondary (Hugging Face)
+    3. Qwen/Qwen2.5-Coder-3B-Instruct — Fallback  (Hugging Face)
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ logger = logging.getLogger("aurix.ai_engine.model_resolver")
 @dataclass
 class ModelSpec:
     """Specification for a supported model."""
-    model_id: str           # HuggingFace repo ID (e.g. "google/gemma-4-E4B-it")
+    model_id: str           # HuggingFace repo ID or Ollama model tag
     alias: str              # Human-readable display name
     effective_params: str   # Parameter tier label (e.g. "E4B", "3B")
     priority: int           # Lower = higher priority (1 = primary)
@@ -40,8 +41,8 @@ class ModelSpec:
 # Ordered by priority (index 0 = highest priority)
 SUPPORTED_MODELS: List[ModelSpec] = [
     ModelSpec(
-        model_id="Qwen/Qwen2.5-Coder-3B-Instruct",
-        alias="Qwen 2.5 Coder 3B Instruct (Primary)",
+        model_id="qwen2.5:3b-instruct",
+        alias="Qwen 2.5 3B Instruct (Ollama Primary)",
         effective_params="3B",
         priority=1,
     ),
@@ -51,12 +52,18 @@ SUPPORTED_MODELS: List[ModelSpec] = [
         effective_params="E4B",
         priority=2,
     ),
+    ModelSpec(
+        model_id="Qwen/Qwen2.5-Coder-3B-Instruct",
+        alias="Qwen 2.5 Coder 3B Instruct (Fallback)",
+        effective_params="3B",
+        priority=3,
+    ),
 ]
 
 # Quick lookup by model_id
 _MODEL_REGISTRY: Dict[str, ModelSpec] = {m.model_id: m for m in SUPPORTED_MODELS}
 
-PRIMARY_MODEL_ID = SUPPORTED_MODELS[0].model_id   # "Qwen/Qwen2.5-Coder-3B-Instruct"
+PRIMARY_MODEL_ID = SUPPORTED_MODELS[0].model_id   # "qwen2.5:3b-instruct"
 SECONDARY_MODEL_ID = SUPPORTED_MODELS[1].model_id  # "google/gemma-4-E4B-it"
 
 
@@ -132,6 +139,49 @@ def _check_project_models_dir(model_id: str) -> Optional[str]:
     return None
 
 
+def _check_ollama_model(model_id: str) -> Optional[str]:
+    """Check if model is available in Ollama locally (via manifests or API)."""
+    clean_id = model_id.lower().strip()
+    if clean_id.startswith("ollama:"):
+        clean_id = clean_id[len("ollama:"):]
+
+    # 1. Check manifests directory on disk (~/.ollama/models/manifests)
+    try:
+        parts = clean_id.split(":")
+        name = parts[0]
+        tag = parts[1] if len(parts) > 1 else "latest"
+        manifest_path = (
+            Path.home()
+            / ".ollama"
+            / "models"
+            / "manifests"
+            / "registry.ollama.ai"
+            / "library"
+            / name
+            / tag
+        )
+        if manifest_path.exists():
+            return f"ollama:{clean_id}"
+    except Exception:
+        pass
+
+    # 2. Check via Ollama REST API if service is running
+    try:
+        import urllib.request
+        import json
+        req = urllib.request.Request("http://localhost:11434/api/tags")
+        with urllib.request.urlopen(req, timeout=1) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            for m in data.get("models", []):
+                m_name = m.get("name", "").lower()
+                if m_name == clean_id or m_name.startswith(f"{clean_id}:") or clean_id.startswith(f"{m_name}:"):
+                    return f"ollama:{m_name}"
+    except Exception:
+        pass
+
+    return None
+
+
 def _check_direct_path(path: str) -> Optional[str]:
     """Check if a direct filesystem path contains model weights."""
     if os.path.isdir(path):
@@ -154,25 +204,31 @@ def detect_model(model_id: str) -> Optional[str]:
     """Detect if a specific model is available locally.
 
     Searches:
-        1. Direct filesystem path (if model_id looks like a path)
-        2. HuggingFace Hub cache
-        3. Project models/ directory
+        1. Ollama local models (manifests / API)
+        2. Direct filesystem path (if model_id looks like a path)
+        3. HuggingFace Hub cache
+        4. Project models/ directory
 
     Returns:
-        Resolved local path to the model weights, or None if not found.
+        Resolved local path or 'ollama:<name>' to the model weights, or None if not found.
     """
-    # 1. Direct path
-    if os.sep in model_id or "/" in model_id and os.path.exists(model_id):
+    # 1. Ollama check (if it starts with ollama:, has colon, or matches known Ollama model)
+    ollama_path = _check_ollama_model(model_id)
+    if ollama_path:
+        return ollama_path
+
+    # 2. Direct path
+    if (os.sep in model_id or "/" in model_id) and os.path.exists(model_id):
         result = _check_direct_path(model_id)
         if result:
             return result
 
-    # 2. HuggingFace cache
+    # 3. HuggingFace cache
     result = _check_hf_cache(model_id)
     if result:
         return result
 
-    # 3. Project models directory
+    # 4. Project models directory
     result = _check_project_models_dir(model_id)
     if result:
         return result
@@ -181,7 +237,9 @@ def detect_model(model_id: str) -> Optional[str]:
 
 
 def is_model_supported(path: str) -> bool:
-    """Verify if the model at path has an architecture recognized by transformers."""
+    """Verify if the model at path has an architecture recognized by transformers or is an Ollama model."""
+    if path.startswith("ollama:"):
+        return True
     try:
         from transformers import AutoConfig
         AutoConfig.from_pretrained(path, local_files_only=True)
@@ -210,13 +268,13 @@ def detect_available_models() -> Dict[str, str]:
 
 
 def download_primary_model(progress_callback=None) -> str:
-    """Download the primary model (Gemma 4 E4B) via huggingface_hub.
+    """Download the primary model via ollama or huggingface_hub.
 
     Args:
         progress_callback: Optional callable(message: str) for progress updates.
 
     Returns:
-        Local cache path where the model was downloaded.
+        Local cache path or ollama identifier where the model was downloaded.
 
     Raises:
         RuntimeError: If the download fails.
@@ -228,35 +286,43 @@ def download_primary_model(progress_callback=None) -> str:
         if progress_callback:
             progress_callback(msg)
 
+    # If primary is an Ollama model, attempt to pull it
+    if ":" in primary.model_id and "/" not in primary.model_id:
+        _log(f"No supported models found locally. Pulling Ollama model '{primary.model_id}'...")
+        try:
+            import subprocess
+            subprocess.run(["ollama", "pull", primary.model_id], check=True)
+            return f"ollama:{primary.model_id}"
+        except Exception as err:
+            _log(f"Ollama pull failed ({err}). Falling back to secondary HuggingFace model...")
+
+    target = next((m for m in SUPPORTED_MODELS if "/" in m.model_id), SUPPORTED_MODELS[1])
     _log(
-        f"No supported models found locally. "
-        f"Downloading primary model: '{primary.alias}' ({primary.model_id})..."
+        f"Downloading HuggingFace model: '{target.alias}' ({target.model_id})..."
     )
 
     try:
         from huggingface_hub import snapshot_download
 
         path = snapshot_download(
-            repo_id=primary.model_id,
-            allow_patterns=primary.download_patterns,
+            repo_id=target.model_id,
+            allow_patterns=target.download_patterns,
         )
-        _log(f"Successfully downloaded '{primary.model_id}' to: {path}")
+        _log(f"Successfully downloaded '{target.model_id}' to: {path}")
         return path
 
     except ImportError:
         error_msg = (
             "huggingface_hub is not installed. Cannot auto-download model.\n"
-            "Install it with: pip install huggingface-hub\n"
-            "Or manually download the model with: python scripts/download_gemma.py"
+            "Install it with: pip install huggingface-hub"
         )
         _log(f"[ERROR] {error_msg}")
         raise RuntimeError(error_msg)
 
     except Exception as e:
         error_msg = (
-            f"Failed to download '{primary.model_id}': {e}\n"
-            "Check your internet connection and HuggingFace authentication.\n"
-            "You can also manually download with: python scripts/download_gemma.py"
+            f"Failed to download '{target.model_id}': {e}\n"
+            "Check your internet connection and HuggingFace authentication."
         )
         _log(f"[ERROR] {error_msg}")
         raise RuntimeError(error_msg)

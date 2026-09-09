@@ -52,10 +52,14 @@ def _load_model_config():
     defaults = {"model_name": "google/gemma-4-E4B-it", "max_seq_length": 2048, "load_in_4bit": True}
     if os.path.exists(cfg_path):
         try:
-            try:
+            import sys
+            if sys.version_info >= (3, 11):
                 import tomllib
-            except ImportError:
-                import tomli as tomllib
+            else:
+                try:
+                    import tomli as tomllib  # type: ignore
+                except ImportError:
+                    tomllib = None  # type: ignore
             with open(cfg_path, "rb") as f:
                 parsed = tomllib.load(f)
                 if "llm" in parsed:

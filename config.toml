@@ -44,16 +44,14 @@ log_level = "info"
 log_file = "logs/aurix_session.log"
 
 [llm]
-# Model selection: set to "auto" for automatic detection (Gemma 4 E4B primary,
-# Qwen 2.5 3B secondary), or specify a HuggingFace model ID to force a model.
-# If "auto" and no model is found locally, Gemma 4 E4B will be downloaded.
-model_name = "auto"
-model_alias = "Auto-Detected (Gemma 4 E4B / Qwen 2.5 3B)"
-effective_params = "auto"
+# Model selection: qwen2.5:3b-instruct via local Ollama
+model_name = "qwen2.5:3b-instruct"
+model_alias = "Qwen 2.5 3B Instruct (Ollama)"
+effective_params = "3B"
 max_seq_length = 2048
-load_in_4bit = true
-quantization = "nf4"
-device = "cuda"
+load_in_4bit = false
+quantization = "none"
+device = "cpu"
 temperature = 0.7
 top_p = 0.9
 
