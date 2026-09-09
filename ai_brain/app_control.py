@@ -1,291 +1,200 @@
-"""AURIX AI Brain -- Dynamic App Control (Launch & Close).
+"""AURIX AI Brain -- Hybrid Dynamic App Control.
 
-Pure-Python module that dynamically discovers and manages applications
-on Windows. No hardcoded app lists -- uses runtime discovery via:
-  - Start Menu shortcut scanning
-  - Windows Registry App Paths
-  - PATH environment scanning
-  - psutil process enumeration with fuzzy matching
-
-Only a minimal alias map is kept for common shorthand convenience.
-
-Fix log (Phase A.1 -- fuzzy matching false positives):
-  Session log showed three real wrong-launch bugs, all traced to the same root
-  cause: `_fuzzy_score`'s substring-matching tiers (score 40/20) accepted a
-  match whenever ANY query word >2 chars appeared as a bare substring inside a
-  candidate name, with a flat acceptance threshold of >=20. Short query words
-  are substrings of huge numbers of unrelated candidate names:
-    - "nte"   is a substring of "Internet Download Manager" -> wrongly launched IDM
-    - "drive" is a substring of "RecoveryDrive"              -> wrongly launched RecoveryDrive
-    - "vs code" partially word-matched "Developer Command Prompt for VS 2022"
-      as well as (or better than) the real "Visual Studio Code" shortcut, and
-      the old flat threshold couldn't tell the two apart.
-
-  Fix: (1) substring-tier matching now requires query words of length >=4
-  (was >2) to even be considered, and its maximum achievable score was lowered
-  so a *pure* substring-only match can no longer clear the acceptance bar on
-  its own for short/medium queries; (2) the acceptance threshold now scales
-  with query length instead of being a flat 20, since short queries need much
-  stronger evidence than long ones; (3) when the top match isn't clearly ahead
-  of the next-best candidate, launch is refused and both/all close candidates
-  are returned for disambiguation instead of silently picking one.
-
-  Trade-off, stated honestly: this makes matching stricter, which fixes the
-  three wrong-launch bugs and correctly still resolves "games" -> Epic Games
-  Launcher and "google" -> Google Chrome (both still pass). It does NOT fix
-  "vs code" resolving to the *correct* Visual Studio Code shortcut -- with the
-  stricter thresholds it now correctly refuses to guess between the two
-  VS-related shortcuts rather than picking the wrong one, but doesn't have
-  enough signal to confidently pick the right one either. That's a real gap;
-  closing it needs either better discovery data (so "Visual Studio Code"'s
-  shortcut is unambiguously distinguishable) or the learned-alias cache
-  (Part A.3 of the LUNA AI Brain directive) so a one-time correction is
-  remembered -- neither is implemented in this file.
+Combines OS-level path resolution with GUI automation. Features intelligent 
+directory pruning to prevent file searches from hanging on heavy dev folders,
+and uses URI protocols to instantly launch UWP/AppData applications.
 """
 
-from __future__ import annotations
-
-import logging
 import os
+import time
 import platform
 import shutil
+import logging
 import subprocess
-import sys
-import time
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Optional, List
 
-logger = logging.getLogger("aurix.ai_brain.app_control")
-
-# ---------------------------------------------------------------------------
-# Conditional imports
-# ---------------------------------------------------------------------------
 try:
     import psutil
     PSUTIL_AVAILABLE = True
 except ImportError:
-    psutil = None
     PSUTIL_AVAILABLE = False
 
+try:
+    import pyautogui
+    pyautogui.PAUSE = 0.1
+    pyautogui.FAILSAFE = True
+    PYAUTOGUI_AVAILABLE = True
+except ImportError:
+    PYAUTOGUI_AVAILABLE = False
+
+logger = logging.getLogger("aurix.ai_brain.app_control")
 IS_WINDOWS = platform.system() == "Windows"
 
-if IS_WINDOWS:
-    try:
-        import winreg
-    except ImportError:
-        winreg = None
-else:
-    winreg = None
-
-
 # ═══════════════════════════════════════════════════════════════════════════
-#  Fuzzy Matching Utilities
-# ═══════════════════════════════════════════════════════════════════════════
-
-# Minimum length a query word must have to be eligible for SUBSTRING (not
-# whole-word) matching. Raised from the previous >2 to >=4: this is what stops
-# 3-letter fragments like "nte" from matching inside unrelated long words like
-# "Internet".
-_MIN_SUBSTRING_WORD_LEN = 4
-
-
-def _fuzzy_score(query: str, candidate: str) -> int:
-    """Score how well *query* matches *candidate* (higher = better).
-
-    Returns 0 if no match at all.
-    Scoring tiers:
-        100 -- exact match
-         80 -- candidate starts with query
-         60 -- query starts with candidate (user typed more than needed)
-         50 -- all query words found as whole words inside candidate (high confidence)
-         30 -- all query words found only as bare substrings inside candidate (low confidence)
-          0 to 29 -- partial word/substring overlap (low confidence, scaled down)
-          0 -- no match
-    """
-    q = query.lower().strip()
-    c = candidate.lower().strip()
-
-    if q == c:
-        return 100
-    if c.startswith(q):
-        return 80
-    if q.startswith(c):
-        return 60
-
-    q_words = q.split()
-    c_words = c.split()
-
-    word_matches = sum(1 for w in q_words if w in c_words)
-
-    # Substring matching: only for words long enough that a coincidental match
-    # inside an unrelated word is unlikely (see _MIN_SUBSTRING_WORD_LEN note above).
-    substr_matches = sum(1 for w in q_words if len(w) >= _MIN_SUBSTRING_WORD_LEN and w in c)
-
-    if word_matches == len(q_words) and word_matches > 0:
-        return 50
-
-    # Lowered from 40 -> 30 (Phase A.1 fix): a purely-substring-based match is
-    # inherently lower confidence than a whole-word match, and 30 sits below
-    # the length-scaled acceptance threshold (see _min_acceptable_score) for
-    # anything shorter than a fairly specific 6+ character query -- so a bare
-    # substring hit alone can no longer silently win for short/medium queries.
-    if substr_matches == len(q_words) and substr_matches > 0:
-        return 30
-
-    # Partial matches -- capped low, same intent as before but working off the
-    # stricter substr_matches count.
-    if word_matches > 0:
-        return 15 + int((word_matches / len(q_words)) * 10)
-    if substr_matches > 0 and (substr_matches / len(q_words)) >= 0.5:
-        return 15
-
-    return 0
-
-
-def _min_acceptable_score(query: str) -> int:
-    """Minimum score required to accept a match at all, scaled by query length.
-
-    Short queries carry much less information than long ones, so the same raw
-    score means very different things: a 40 for a 3-character query is almost
-    certainly coincidental (see the "nte" bug); a 40 for an 8-character query
-    is much more likely to be a real, specific match. This directly replaces
-    the old flat `score >= 20` threshold that accepted both cases equally.
-    """
-    n = len(query.strip())
-    if n <= 3:
-        return 80   # only exact / clear-prefix matches for very short queries
-    if n <= 5:
-        return 50   # must be at least a whole-word match, not a bare substring hit
-    return 30       # longer, more specific queries may rely on substring matches
-
-
-@dataclass
-class MatchResult:
-    """Result of attempting to resolve a query against a candidate pool."""
-    status: str  # "matched" | "ambiguous" | "none"
-    top_name: str = ""
-    top_path: str = ""
-    top_score: int = 0
-    alternatives: List[Tuple[str, str, int]] = field(default_factory=list)  # (name, path, score)
-
-
-def find_best_match(
-    query: str,
-    candidates: List[Tuple[str, str]],
-    ambiguity_margin: int = 12,
-) -> MatchResult:
-    """Score every candidate against *query* and decide whether there's a
-    single confident winner, an ambiguous tie, or no acceptable match.
-
-    Args:
-        query: The user's typed/spoken target.
-        candidates: List of (name, path) pairs to score against.
-        ambiguity_margin: If the runner-up scores within this many points of
-            the top match (and isn't just the same underlying path), the
-            match is considered ambiguous rather than auto-resolved.
-    """
-    if not candidates:
-        return MatchResult(status="none")
-
-    scored = sorted(
-        ((name, path, _fuzzy_score(query, name)) for name, path in candidates),
-        key=lambda item: item[2],
-        reverse=True,
-    )
-
-    top_name, top_path, top_score = scored[0]
-    min_score = _min_acceptable_score(query)
-
-    if top_score < min_score or top_score <= 0:
-        return MatchResult(status="none")
-
-    close_alternatives: List[Tuple[str, str, int]] = []
-    for name, path, score in scored[1:]:
-        if path == top_path:
-            continue  # same underlying target under a different label -- not a real alternative
-        if top_score - score <= ambiguity_margin:
-            close_alternatives.append((name, path, score))
-        else:
-            break  # sorted descending, so nothing further can be within the margin either
-
-    if close_alternatives:
-        return MatchResult(
-            status="ambiguous",
-            top_name=top_name,
-            top_path=top_path,
-            top_score=top_score,
-            alternatives=close_alternatives,
-        )
-
-    return MatchResult(status="matched", top_name=top_name, top_path=top_path, top_score=top_score)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  AppLauncher -- Dynamic Application Launcher
+#  AppLauncher -- Hybrid Directory, File & GUI Launcher
 # ═══════════════════════════════════════════════════════════════════════════
 
 class AppLauncher:
-    """Dynamically discovers and launches applications on Windows.
-
-    Discovery pipeline (tried in order, first hit wins):
-        1. Minimal alias resolution (convenience shorthand only)
-        2. Start Menu shortcut (.lnk) scanning with fuzzy match
-        3. Windows Registry App Paths lookup
-        4. PATH / shutil.which() scan
-        5. os.startfile() fallback (let Windows figure it out)
-        6. Direct URL pass-through
-
-    NOTE: Additional discovery sources (Steam library manifests, Epic Games
-    manifests, Windows Uninstall registry keys) and the learned-alias cache
-    described in the LUNA AI Brain directive (Part A.2/A.3) are NOT included
-    in this file -- they need real installed-application data to write and
-    verify against, which isn't available in an isolated review/fix pass like
-    this one. This file only fixes the fuzzy-matching false-positive bugs
-    (Part A.1) in the existing Start Menu discovery path.
+    """
+    Dynamically launches apps, folders, and files using an optimized tiered approach.
     """
 
-    def __init__(self) -> None:
-        self._shortcut_cache: Optional[List[Tuple[str, str]]] = None  # (name, path)
-
-    # ── Public API ────────────────────────────────────────────────────────
+    def __init__(self):
+        # Maps common names to their exact executables or Windows URIs
+        self._aliases = {
+            "setting": "ms-settings:",
+            "settings": "ms-settings:",
+            "calculator": "calc.exe",
+            "notepad": "notepad.exe",
+            "cmd": "cmd.exe",
+            "terminal": "cmd.exe",
+            "powershell": "powershell.exe",
+            "explorer": "explorer.exe",
+            "file explorer": "explorer.exe",
+            "paint": "mspaint.exe",
+            "task manager": "taskmgr.exe",
+            "chrome": "chrome.exe",
+            "google chrome": "chrome.exe",
+            
+            # Use URI protocols for apps hidden in AppData to bypass search
+            "spotify": "spotify:",
+            "whatsapp": "whatsapp:",
+            
+            "vscode": "code",
+            "vs code": "code",
+            "visual studio code": "code"
+        }
 
     def launch(self, target: str) -> str:
         """Attempt to launch *target*. Returns a human-readable status message."""
         if not target or not target.strip():
-            return "No application name provided."
+            return "No application, folder, or file name provided."
 
         raw = target.strip()
-        logger.info("AppLauncher: requested '%s'", raw)
-
-        # 0. Direct URL
         lower = raw.lower()
+        
+        # 1. Check if it is a URL
         if lower.startswith(("http://", "https://", "www.")):
             return self._open_url(raw)
 
-        # 1. Start Menu shortcut scan
-        result = self._try_start_menu(raw)
-        if result:
-            return result
+        # Build execution queue: Try exact literal string first, THEN try stripped string
+        targets_to_try = [lower]
+        cleaned = lower
+        for suffix in [" folder", " file", " directory", " app"]:
+            if cleaned.endswith(suffix):
+                cleaned = cleaned[:-len(suffix)].strip()
+                break
+        
+        if cleaned != lower:
+            targets_to_try.append(cleaned)
 
-        # 2. Registry App Paths
-        result = self._try_registry(raw)
-        if result:
-            return result
+        logger.info("AppLauncher: targets queued for resolution -> %s", targets_to_try)
 
-        # 3. PATH / shutil.which
-        result = self._try_path(raw)
-        if result:
-            return result
+        # 2. Check Directories (Exact first, then stripped)
+        for t in targets_to_try:
+            folder_path = self._resolve_local_folder(t)
+            if folder_path:
+                return self._launch_via_startfile(str(folder_path), is_folder=True)
 
-        # 4. os.startfile fallback
-        result = self._try_startfile(raw)
-        if result:
-            return result
+        # 3. Check Aliases (Fast Lane)
+        for t in targets_to_try:
+            for alias_key, alias_val in self._aliases.items():
+                if t == alias_key:
+                    success_msg = self._launch_via_startfile(alias_val)
+                    if success_msg:
+                        return success_msg
 
-        return f"Could not find application: {raw}"
+        # 4. Check Local Files (Fast os.walk traversal)
+        for t in targets_to_try:
+            local_file = self._resolve_local_file(t)
+            if local_file and local_file.exists():
+                return self._launch_via_startfile(str(local_file), is_folder=False)
 
-    # ── Discovery Methods ─────────────────────────────────────────────────
+        # 5. Check PATH environment
+        for t in targets_to_try:
+            path_hit = shutil.which(t) or shutil.which(f"{t}.exe")
+            if path_hit:
+                try:
+                    subprocess.Popen([path_hit], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return f"Launched {os.path.basename(path_hit)} via system PATH."
+                except Exception as e:
+                    logger.error("AppLauncher: PATH launch failed: %s", e)
+
+        # 6. Fallback to PyAutoGUI
+        if IS_WINDOWS and PYAUTOGUI_AVAILABLE:
+            return self._launch_via_pyautogui(raw)
+
+        return f"Could not find or launch: {raw}"
+
+    def _resolve_local_folder(self, target: str) -> Optional[Path]:
+        """Resolves folder paths efficiently while avoiding search bar hijacking."""
+        home = Path.home()
+        shortcuts = {
+            "desktop":   home / "Desktop",
+            "downloads": home / "Downloads",
+            "documents": home / "Documents",
+            "pictures":  home / "Pictures",
+            "music":     home / "Music",
+            "videos":    home / "Videos",
+            "home":      home,
+        }
+
+        if target in shortcuts:
+            return shortcuts[target]
+
+        search_dirs = [home / "Desktop", home / "Documents", home / "Downloads"]
+        for directory in search_dirs:
+            if directory.exists():
+                potential_path = directory / target
+                if potential_path.exists() and potential_path.is_dir():
+                    return potential_path
+
+        return None
+
+    def _resolve_local_file(self, query: str) -> Optional[Path]:
+        """
+        Searches user directories utilizing fast os.walk pruning. 
+        Instantly skips heavy developer folders to prevent bottlenecking.
+        """
+        home = Path.home()
+        search_dirs = [home / "Documents", home / "Desktop", home / "Downloads"]
+        
+        matches = []
+        q_lower = query.strip().lower()
+        
+        # Auto-append common extensions if none are provided
+        if not any(q_lower.endswith(ext) for ext in [".pdf", ".docx", ".txt", ".xlsx", ".png", ".py", ".md", ".csv"]):
+            search_terms = [q_lower, f"{q_lower}.pdf", f"{q_lower}.docx", f"{q_lower}.txt"]
+        else:
+            search_terms = [q_lower]
+
+        # These directories are completely ignored to maintain speed
+        skip_dirs = {".git", "node_modules", "venv", "env", "__pycache__", "appdata", "site-packages", ".vscode", "build", "dist"}
+
+        for directory in search_dirs:
+            if not directory.exists():
+                continue
+                
+            for root, dirs, files in os.walk(directory):
+                # IN-PLACE PRUNING: Modifies the dirs list so os.walk ignores heavy folders
+                dirs[:] = [d for d in dirs if d.lower() not in skip_dirs]
+                
+                for file_name in files:
+                    name_lower = file_name.lower()
+                    if any(term == name_lower or term in name_lower for term in search_terms):
+                        full_path = Path(root) / file_name
+                        try:
+                            matches.append((full_path.stat().st_mtime, full_path))
+                        except Exception:
+                            matches.append((0, full_path))
+
+        if matches:
+            # Sort by modification time descending to open the most recent version
+            matches.sort(key=lambda x: x[0], reverse=True)
+            return matches[0][1]
+            
+        return None
 
     def _open_url(self, url: str) -> str:
         """Open a URL in the default browser."""
@@ -295,140 +204,39 @@ class AppLauncher:
         except Exception as e:
             return f"Failed to open URL {url}: {e}"
 
-    def _scan_start_menu(self) -> List[Tuple[str, str]]:
-        """Scan Start Menu directories for .lnk shortcuts. Cached after first scan."""
-        if self._shortcut_cache is not None:
-            return self._shortcut_cache
-
-        shortcuts: List[Tuple[str, str]] = []
-        if not IS_WINDOWS:
-            self._shortcut_cache = shortcuts
-            return shortcuts
-
-        dirs = [
-            os.path.join(os.environ.get("ProgramData", "C:\\ProgramData"),
-                         "Microsoft", "Windows", "Start Menu", "Programs"),
-            os.path.join(os.environ.get("APPDATA", ""),
-                         "Microsoft", "Windows", "Start Menu", "Programs"),
-        ]
-
-        for d in dirs:
-            if not os.path.isdir(d):
-                continue
-            for root, _, files in os.walk(d):
-                for f in files:
-                    if f.lower().endswith(".lnk"):
-                        stem = os.path.splitext(f)[0]
-                        full = os.path.join(root, f)
-                        shortcuts.append((stem, full))
-
-        self._shortcut_cache = shortcuts
-        logger.info("AppLauncher: cached %d Start Menu shortcuts", len(shortcuts))
-        return shortcuts
-
-    def _try_start_menu(self, query: str) -> Optional[str]:
-        """Search Start Menu shortcuts for the best fuzzy match.
-
-        FIX (Phase A.1): now goes through find_best_match() instead of a
-        simple max-score loop with a flat >=20 threshold. This both raises
-        the bar for short/ambiguous queries and, when the top two candidates
-        are genuinely close, refuses to guess and asks the caller to
-        disambiguate instead of silently launching the higher-scoring one.
-        """
-        shortcuts = self._scan_start_menu()
-        if not shortcuts:
-            return None
-
-        result = find_best_match(query, shortcuts)
-
-        if result.status == "matched":
-            try:
-                os.startfile(result.top_path)
-                logger.info(
-                    "AppLauncher: launched via Start Menu -- '%s' (score=%d)",
-                    result.top_name, result.top_score,
-                )
-                return f"Launched {result.top_name}."
-            except Exception as e:
-                logger.error("AppLauncher: Start Menu launch failed for '%s': %s", result.top_name, e)
-                return None
-
-        if result.status == "ambiguous":
-            options = [result.top_name] + [alt[0] for alt in result.alternatives]
-            logger.info(
-                "AppLauncher: ambiguous match for '%s' -- candidates: %s", query, options
-            )
-            names = ", ".join(f"'{n}'" for n in options[:4])
-            return f"That's ambiguous -- did you mean {names}? Please be more specific."
-
-        return None
-
-    def _try_registry(self, query: str) -> Optional[str]:
-        """Look up application in Windows Registry App Paths."""
-        if not IS_WINDOWS or winreg is None:
-            return None
-
-        # Try direct exe name
-        exe_candidates = [query, f"{query}.exe"]
-        for exe_name in exe_candidates:
-            try:
-                key_path = rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe_name}"
-                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as key:
-                    exe_path, _ = winreg.QueryValueEx(key, "")
-                    if exe_path and os.path.isfile(exe_path):
-                        subprocess.Popen([exe_path])
-                        logger.info("AppLauncher: launched via Registry -- '%s'", exe_path)
-                        return f"Launched {query}."
-            except (FileNotFoundError, OSError):
-                continue
-
-        return None
-
-    def _try_path(self, query: str) -> Optional[str]:
-        """Search PATH for matching executable."""
-        # Try exact name first
-        found = shutil.which(query)
-        if not found:
-            found = shutil.which(f"{query}.exe")
-        if not found:
-            # Try without spaces (e.g., "file explorer" -> "explorer")
-            for word in query.lower().split():
-                found = shutil.which(word)
-                if found:
-                    break
-
-        if found:
-            try:
-                subprocess.Popen([found])
-                logger.info("AppLauncher: launched via PATH -- '%s'", found)
-                return f"Launched {os.path.basename(found)}."
-            except Exception as e:
-                logger.error("AppLauncher: PATH launch failed for '%s': %s", found, e)
-        return None
-
-    def _try_startfile(self, query: str) -> Optional[str]:
-        """Last resort: let Windows try to figure it out via os.startfile or shell."""
+    def _launch_via_startfile(self, target: str, is_folder: bool = False) -> Optional[str]:
+        """Silently launches an executable, URI, folder, or file via OS bindings."""
         if not IS_WINDOWS:
             return None
         try:
-            os.startfile(query)
-            logger.info("AppLauncher: launched via os.startfile -- '%s'", query)
-            return f"Launched {query}."
+            os.startfile(target)
+            path_obj = Path(target)
+            if is_folder:
+                target_type = "folder"
+            elif path_obj.is_file():
+                target_type = "file"
+            else:
+                target_type = "application"
+                
+            logger.info("AppLauncher: launched via os.startfile -- '%s'", target)
+            name = path_obj.name if path_obj.exists() else target
+            return f"Opened {target_type}: {name}."
         except OSError:
-            pass
+            return None
 
-        # Try appending .exe
+    def _launch_via_pyautogui(self, target: str) -> str:
+        """Uses GUI automation to type the app name into the Start menu."""
         try:
-            os.startfile(f"{query}.exe")
-            return f"Launched {query}."
-        except OSError:
-            pass
-
-        return None
-
-    def invalidate_cache(self) -> None:
-        """Force re-scan of Start Menu on next launch attempt."""
-        self._shortcut_cache = None
+            logger.info("AppLauncher: falling back to GUI automation for '%s'", target)
+            pyautogui.press("win")
+            time.sleep(0.6)
+            pyautogui.write(target, interval=0.05)
+            time.sleep(0.8)
+            pyautogui.press("enter")
+            return f"Used Windows Search to launch: {target}."
+        except Exception as e:
+            logger.error("AppLauncher: GUI launch failed: %s", e)
+            return f"Failed to automate GUI for {target}: {e}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -436,21 +244,22 @@ class AppLauncher:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class AppCloser:
-    """Dynamically finds and terminates running applications.
+    """Dynamically finds and terminates running applications using psutil."""
+    
+    def __init__(self):
+        # STRICT MINIMAL ALIASES:
+        # Only used when the conversational name completely differs from the Windows process name.
+        self._close_aliases = {
+            "task manager": "taskmgr",
+            "command prompt": "cmd",
+            "vs code": "code",
+            "visual studio code": "code",
+            "settings": "systemsettings",
+            "calculator": "calculatorapp",
+            "paint": "mspaint",
+            "terminal": "windowsterminal"
+        }
 
-    Uses psutil to scan all running processes and fuzzy-matches by:
-      - Process name
-      - Window title (on Windows via process.name() / cmdline)
-    Gracefully terminates first, force-kills after timeout.
-
-    NOTE: This class's matching logic was NOT part of the demonstrated bug
-    log (the failures shown were all launch-side), so it hasn't been touched
-    beyond continuing to use the shared, now-fixed _fuzzy_score(). If closing
-    the wrong process is ever observed in practice, it should go through the
-    same find_best_match()/ambiguity treatment as AppLauncher above.
-    """
-
-    # System-critical processes we must NEVER kill
     _PROTECTED = frozenset({
         "system", "smss", "csrss", "wininit", "winlogon", "services",
         "lsass", "svchost", "dwm", "taskhostw", "explorer",
@@ -460,7 +269,7 @@ class AppCloser:
     })
 
     def close(self, target: str) -> str:
-        """Attempt to close application matching *target*. Returns status message."""
+        """Attempt to close application matching *target*."""
         if not target or not target.strip():
             return "No application name provided."
 
@@ -469,78 +278,38 @@ class AppCloser:
 
         raw = target.strip()
         lower = raw.lower()
-        logger.info("AppCloser: requested to close '%s'", raw)
+        
+        # TRANSLATION STEP: If the user typed "task manager", turn it into "taskmgr".
+        # If it's not in the dictionary, just use whatever the user typed.
+        search_target = self._close_aliases.get(lower, lower)
+        
+        logger.info("AppCloser: requested to close '%s' (searching for process: '%s')", raw, search_target)
 
-        # Scan running processes
-        search_terms = [lower]
-        candidates: List[Tuple[int, "psutil.Process", str]] = []  # (score, process, matched_name)
-
-        for proc in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
-            try:
-                proc_name = proc.info["name"] or ""
-                proc_name_lower = proc_name.lower()
-
-                # Skip protected system processes
-                proc_stem = os.path.splitext(proc_name_lower)[0]
-                if proc_stem in self._PROTECTED:
-                    continue
-
-                # Score against each search term
-                best = 0
-                for term in search_terms:
-                    s = _fuzzy_score(term, proc_name_lower)
-                    # Also check the exe path basename
-                    if s < 20 and proc.info.get("exe"):
-                        exe_base = os.path.splitext(os.path.basename(proc.info["exe"]))[0]
-                        s = max(s, _fuzzy_score(term, exe_base))
-                    best = max(best, s)
-
-                if best >= _min_acceptable_score(raw):
-                    candidates.append((best, proc, proc_name))
-
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                continue
-
-        if not candidates:
-            return f"No running application found matching: {raw}"
-
-        # Sort by score descending -- kill the best matches
-        candidates.sort(key=lambda x: x[0], reverse=True)
-
-        # Group by process name to report cleanly
-        killed_names = set()
         killed_count = 0
         errors = []
 
-        for score, proc, proc_name in candidates:
+        for proc in psutil.process_iter(["pid", "name"]):
             try:
-                proc.terminate()
-                killed_names.add(proc_name)
-                killed_count += 1
+                proc_name = proc.info["name"] or ""
+                proc_name_lower = proc_name.lower()
+                proc_stem = os.path.splitext(proc_name_lower)[0]
+
+                if proc_stem in self._PROTECTED:
+                    continue
+
+                # Match against the TRANSLATED search_target, not the raw input
+                if search_target in proc_name_lower:
+                    proc.terminate()
+                    killed_count += 1
             except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-                errors.append(f"{proc_name} (PID {proc.pid}): {e}")
+                errors.append(f"{proc.info.get('name', 'Unknown')}: {e}")
                 continue
 
-        # Wait briefly then force-kill stragglers
         if killed_count > 0:
-            time.sleep(0.5)
-            for _, proc, proc_name in candidates:
-                try:
-                    if proc.is_running():
-                        proc.kill()
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-
-        if killed_count > 0:
-            names_str = ", ".join(sorted(killed_names))
-            msg = f"Closed {names_str}."
-            if errors:
-                msg += f" (Some processes couldn't be stopped: {'; '.join(errors)})"
-            logger.info("AppCloser: closed %d processes -- %s", killed_count, names_str)
-            return msg
+            return f"Successfully closed {killed_count} instance(s) matching '{raw}'."
 
         if errors:
-            return f"Found matching processes but couldn't close them: {'; '.join(errors)}"
+            return f"Found processes but couldn't close them: {'; '.join(errors)}"
 
         return f"No running application found matching: {raw}"
 
@@ -549,19 +318,154 @@ class AppCloser:
         if not IS_WINDOWS:
             return "Cannot close applications without psutil on this platform."
 
-        search_terms = [target.strip()]
+        lower = target.strip().lower()
+        # Ensure the fallback closer also translates the alias
+        search_target = self._close_aliases.get(lower, lower)
+        
+        exe_name = search_target if search_target.endswith(".exe") else f"{search_target}.exe"
+        try:
+            result = subprocess.run(
+                ["taskkill", "/F", "/IM", exe_name, "/T"],
+                capture_output=True, text=True, errors="replace",
+            )
+            if result.returncode == 0:
+                return f"Closed {target}."
+        except Exception as e:
+            logger.error("AppCloser: taskkill failed for '%s': %s", exe_name, e)
 
-        for term in search_terms:
-            exe_name = term if term.endswith(".exe") else f"{term}.exe"
+        return f"Could not find or terminate running application: {target}"# ═══════════════════════════════════════════════════════════════════════════
+#  AppCloser -- Dynamic Application Closer
+# ═══════════════════════════════════════════════════════════════════════════
+
+class AppCloser:
+    """Dynamically finds and terminates running applications using psutil."""
+    
+    def __init__(self):
+        # STRICT MINIMAL ALIASES:
+        # Only used when the conversational name completely differs from the Windows process name.
+        self._close_aliases = {
+            "task manager": "taskmgr",
+            "command prompt": "cmd",
+            "vs code": "code",
+            "visual studio code": "code",
+            "settings": "systemsettings",
+            "calculator": "calculatorapp",
+            "paint": "mspaint",
+            "terminal": "windowsterminal"
+        }
+
+    _PROTECTED = frozenset({
+        "system", "smss", "csrss", "wininit", "winlogon", "services",
+        "lsass", "svchost", "dwm", "taskhostw", "explorer",
+        "sihost", "fontdrvhost", "ctfmon", "runtimebroker",
+        "searchhost", "startmenuexperiencehost", "shellexperiencehost",
+        "textinputhost", "securityhealthservice", "securityhealthsystray",
+    })
+
+    def close(self, target: str) -> str:
+        """Attempt to close application matching *target*."""
+        if not target or not target.strip():
+            return "No application name provided."
+
+        if not PSUTIL_AVAILABLE:
+            return self._fallback_close(target)
+
+        raw = target.strip()
+        lower = raw.lower()
+        
+        # TRANSLATION STEP: If the user typed "task manager", turn it into "taskmgr".
+        # If it's not in the dictionary, just use whatever the user typed.
+        search_target = self._close_aliases.get(lower, lower)
+        
+        logger.info("AppCloser: requested to close '%s' (searching for process: '%s')", raw, search_target)
+
+        killed_count = 0
+        errors = []
+
+        for proc in psutil.process_iter(["pid", "name"]):
             try:
-                result = subprocess.run(
-                    ["taskkill", "/F", "/IM", exe_name, "/T"],
-                    capture_output=True, text=True, errors="replace",
-                )
-                if result.returncode == 0:
-                    logger.info("AppCloser: taskkill closed '%s'", exe_name)
-                    return f"Closed {target.strip()}."
-            except Exception as e:
-                logger.error("AppCloser: taskkill failed for '%s': %s", exe_name, e)
+                proc_name = proc.info["name"] or ""
+                proc_name_lower = proc_name.lower()
+                proc_stem = os.path.splitext(proc_name_lower)[0]
 
-        return f"Could not find running application: {target.strip()}"
+                if proc_stem in self._PROTECTED:
+                    continue
+
+                # Match against the TRANSLATED search_target, not the raw input
+                if search_target in proc_name_lower:
+                    proc.terminate()
+                    killed_count += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                errors.append(f"{proc.info.get('name', 'Unknown')}: {e}")
+                continue
+
+        if killed_count > 0:
+            return f"Successfully closed {killed_count} instance(s) matching '{raw}'."
+
+        if errors:
+            return f"Found processes but couldn't close them: {'; '.join(errors)}"
+
+        return f"No running application found matching: {raw}"
+
+    def _fallback_close(self, target: str) -> str:
+        """Fallback when psutil is not installed -- use taskkill on Windows."""
+        if not IS_WINDOWS:
+            return "Cannot close applications without psutil on this platform."
+
+        lower = target.strip().lower()
+        # Ensure the fallback closer also translates the alias
+        search_target = self._close_aliases.get(lower, lower)
+        
+        exe_name = search_target if search_target.endswith(".exe") else f"{search_target}.exe"
+        try:
+            result = subprocess.run(
+                ["taskkill", "/F", "/IM", exe_name, "/T"],
+                capture_output=True, text=True, errors="replace",
+            )
+            if result.returncode == 0:
+                return f"Closed {target}."
+        except Exception as e:
+            logger.error("AppCloser: taskkill failed for '%s': %s", exe_name, e)
+
+        return f"Could not find or terminate running application: {target}"
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="[%(name)s] %(levelname)s: %(message)s")
+    
+    print("=" * 50)
+    print("AURIX App Control - Standalone Test Mode")
+    print("Commands: 'open <target>', 'close <target>', or 'exit'")
+    print("=" * 50)
+    
+    launcher = AppLauncher()
+    closer = AppCloser()
+    
+    while True:
+        try:
+            user_input = input("\n[Test Mode] >>> ").strip()
+            
+            if not user_input:
+                continue
+                
+            if user_input.lower() in ["exit", "quit"]:
+                print("Exiting test mode.")
+                break
+                
+            if user_input.lower().startswith("open "):
+                target = user_input[5:].strip()
+                result = launcher.launch(target)
+                print(f"Result: {result}")
+                
+            elif user_input.lower().startswith("close "):
+                target = user_input[6:].strip()
+                result = closer.close(target)
+                print(f"Result: {result}")
+                
+            else:
+                print("Invalid command. Please use 'open <target>', 'close <target>', or 'exit'.")
+                
+        except KeyboardInterrupt:
+            print("\nExiting test mode.")
+            break
+        except Exception as e:
+            print(f"\nAn error occurred: {e}")

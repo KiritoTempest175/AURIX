@@ -1,224 +1,291 @@
-"""AURIX AI Brain — Central Intent Dispatcher.
+"""AURIX AI Brain -- Central Intent Dispatcher.
 
-Routes user text to the appropriate brain-level handler. This is the single
-entry point that frontend.py calls — it decides whether a command is a brain
-action (open/close/cmd) or should fall through to the LLM.
+Rev. 2 -- adds WhatsApp messaging/calling, routed through a two-turn
+confirm flow: the first utterance resolves the contact and asks for
+confirmation; the NEXT utterance (yes/no) actually executes the send/call.
+This is necessary because dispatch(text) is single-shot (one reply per
+call, no blocking wait for a second input) -- see whatsapp_control.py's
+docstring for why the confirmation logic couldn't just be a blocking
+callback inside a single dispatch() call.
+
+Still uses the existing prefix-based routing for open/close/cmd -- the
+LUNA AI Brain directive's recommendation to eventually replace this with
+Gemma 4 E4B function-calling still stands, but is a separate, larger
+change from this one, which only adds WhatsApp support in the style the
+rest of this file already uses.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
-from typing import Tuple, Optional
+from typing import Optional, Tuple
 
 from ai_brain.app_control import AppCloser, AppLauncher
-from security.permissions import PermissionManager, ActionCategory
-from ai_engine.inference.gemma_e4b import get_default_gemma_runner
+from ai_brain.message_control import (
+    ActionResult,
+    PendingWhatsAppAction,
+    WhatsAppController,
+    WhatsAppLaunchError,
+    WhatsAppUIError,
+)
 
 logger = logging.getLogger("aurix.ai_brain.dispatcher")
 
+_AFFIRMATIVE = frozenset({"yes", "yeah", "yep", "confirm", "confirmed", "do it", "send it", "go ahead", "sure"})
+_NEGATIVE = frozenset({"no", "nope", "cancel", "cancelled", "stop", "don't", "dont", "never mind", "nevermind"})
+
 
 class BrainDispatcher:
-    """Central brain router that parses intent and dispatches to handlers."""
+    """Central brain router that parses intent and dispatches to handlers.
 
-    # Greetings / wake phrases handled directly
+    Usage from frontend.py:
+        brain = BrainDispatcher(uia_actuator=core_engine.UiaController())
+        reply, handled = brain.dispatch(user_text)
+        if not handled:
+            # fall through to LLM
+    """
+
     _WAKE_PHRASES = frozenset({
         "luna", "hey luna", "aurix", "wake up", "call luna", "hello",
     })
 
-    def __init__(self, permission_manager: Optional[PermissionManager] = None) -> None:
+    def __init__(self, uia_actuator=None, process_checker=None) -> None:
         self.launcher = AppLauncher()
         self.closer = AppCloser()
-        self.permission_manager = permission_manager or PermissionManager()
-        self.gemma_runner = get_default_gemma_runner()
-        logger.info("BrainDispatcher initialized.")
+
+        # WhatsApp support is optional -- if no actuator is supplied (e.g. the
+        # Rust core_engine_uia_patch.rs additions haven't been built yet),
+        # WhatsApp commands are reported as unavailable rather than crashing
+        # the whole dispatcher.
+        self._whatsapp: Optional[WhatsAppController] = None
+        if uia_actuator is not None:
+            checker = process_checker or _DefaultProcessChecker()
+            self._whatsapp = WhatsAppController(
+                actuator=uia_actuator,
+                app_launcher=self.launcher,
+                process_checker=checker,
+            )
+
+        # Two-turn confirmation state -- set when a message/call has been
+        # resolved and is awaiting a yes/no from the next utterance. Cleared
+        # after either turn resolves it (confirmed, declined, or a new
+        # unrelated command interrupts it -- see dispatch()).
+        self._pending_whatsapp: Optional[PendingWhatsAppAction] = None
+
+        logger.info("BrainDispatcher initialized. WhatsApp support: %s", "enabled" if self._whatsapp else "disabled")
 
     def dispatch(self, text: str) -> Tuple[str, bool]:
-        """Parse user text and route to the appropriate handler using Gemma."""
         if not text or not text.strip():
             return ("", False)
 
         trimmed = text.strip()
         lower = trimmed.lower()
 
-        # 1. Check wake phrases
+        # ── Pending WhatsApp confirmation takes priority over everything
+        #    else -- if we just asked "send this to X?", the next thing the
+        #    user says should be interpreted as answering that, not as a
+        #    brand new command. ─────────────────────────────────────────
+        if self._pending_whatsapp is not None:
+            return self._resolve_pending_whatsapp(lower)
+
+        # ── Wake / greeting phrases ───────────────────────────────────────
         if lower in self._WAKE_PHRASES:
             return ("AURIX Executive online and listening. Ready for your command.", True)
 
-        # 2. Check literal shell prefix
+        # ── Shell command execution ───────────────────────────────────────
         if lower.startswith("cmd:") or lower.startswith("run:"):
             raw_cmd = trimmed.split(":", 1)[1].strip()
             return self._handle_shell(raw_cmd)
 
-        # 3. LLM-driven tool selection
-        tool_call = self.gemma_runner.select_tool(text)
-        tool_name = tool_call.get("tool")
-        args = tool_call.get("args", {})
+        # ── WhatsApp message ────────────────────────────────────────────
+        # Accepted forms: "message <contact> saying <text>" / "text <contact> saying <text>"
+        parsed = self._try_parse_whatsapp_message(trimmed)
+        if parsed is not None:
+            contact, message = parsed
+            return self._start_whatsapp_message(contact, message)
 
-        logger.info(f"LLM Tool Selection: {tool_name} with args {args}")
+        # ── WhatsApp call ────────────────────────────────────────────────
+        # Accepted forms: "call <contact>" / "video call <contact>"
+        parsed_call = self._try_parse_whatsapp_call(lower, trimmed)
+        if parsed_call is not None:
+            contact, video = parsed_call
+            return self._start_whatsapp_call(contact, video)
 
-        # 4. Map tool names to handler methods
-        handlers = {
-            "open_app": self._handle_open_app,
-            "close_app": self._handle_close_app,
-            "play_media": self._handle_play_media,
-            "web_search": self._handle_web_search,
-            "send_email": self._handle_send_email,
-            "send_whatsapp_message": self._handle_send_whatsapp,
-            "make_phone_call": self._handle_make_phone_call,
-            "general_answer": self._handle_general_answer,
-        }
+        # ── Close application ─────────────────────────────────────────────
+        if lower.startswith("close "):
+            target = trimmed[6:].strip()
+            if target:
+                return (self.closer.close(target), True)
 
-        handler = handlers.get(tool_name)
-        if not handler:
-            return self._handle_general_answer({"response": f"Unknown tool selected: {tool_name}"})
+        # ── Open / launch application ─────────────────────────────────────
+        if lower.startswith("open "):
+            target = trimmed[5:].strip()
+            if target:
+                return (self.launcher.launch(target), True)
 
-        # 5. Execute
-        try:
-            return handler(args)
-        except Exception as e:
-            logger.error(f"Error executing tool {tool_name}: {e}")
-            return (f"Error executing {tool_name}: {e}", True)
+        if lower in ("notepad", "calc", "calculator", "explorer"):
+            return (self.launcher.launch(lower), True)
 
-    # ── Tool Handlers ─────────────────────────────────────────────────────
-
-    def _handle_open_app(self, args: dict) -> Tuple[str, bool]:
-        target = args.get("target")
-        if not target:
-            return ("No target specified to open.", True)
-        return (self.launcher.launch(target), True)
-
-    def _handle_close_app(self, args: dict) -> Tuple[str, bool]:
-        target = args.get("target")
-        if not target:
-            return ("No target specified to close.", True)
-        return (self.closer.close(target), True)
-
-    def _handle_play_media(self, args: dict) -> Tuple[str, bool]:
-        # Lazy load to avoid circular deps if needed
-        from ai_brain.media_player import MediaPlayer
-        player = MediaPlayer()
-        
-        query = args.get("query", "")
-        service = args.get("service", "spotify")
-        action = args.get("action", "play")
-        
-        if action == "play" and query:
-            return (player.play(query, service), True)
-        elif action == "pause":
-            return (player.pause(service), True)
-        else:
-            return (f"Media action {action} not fully implemented.", True)
-
-    def _handle_web_search(self, args: dict) -> Tuple[str, bool]:
-        from ai_brain.web_search import WebSearcher
-        searcher = WebSearcher()
-        query = args.get("query")
-        if not query:
-            return ("No search query provided.", True)
-        return (searcher.search(query, self.gemma_runner), True)
-
-    def _handle_send_email(self, args: dict) -> Tuple[str, bool]:
-        from ai_brain.communications import EmailClient
-        to = args.get("to")
-        subject = args.get("subject", "")
-        body = args.get("body", "")
-        
-        if self.permission_manager.requires_trust_token(ActionCategory.EXTERNAL_COMMUNICATION, to):
-            # frontend.py will handle the actual interruption, we just return a structured response
-            return (f"TRUST_TOKEN_REQUIRED:email:{to}|{subject}|{body}", True)
-            
-        client = EmailClient()
-        return (client.send_email(to, subject, body), True)
-
-    def _handle_send_whatsapp(self, args: dict) -> Tuple[str, bool]:
-        contact = (args.get("contact") or "").strip()
-        message = (args.get("message") or "").strip()
-        if not contact or not message:
-            return ("Please specify both a recipient contact and a message body.", True)
-
-        from ai_brain.communications import WhatsAppClient
-        if self.permission_manager.requires_trust_token(ActionCategory.EXTERNAL_COMMUNICATION, contact):
-            return (f"TRUST_TOKEN_REQUIRED:whatsapp:{contact}|{message}", True)
-            
-        client = WhatsAppClient()
-        return (client.send_message(contact, message), True)
-
-    def _handle_make_phone_call(self, args: dict) -> Tuple[str, bool]:
-        contact = (args.get("contact") or "").strip()
-        message = (args.get("message") or "").strip()
-        if not contact:
-            return ("Please specify a contact to call.", True)
-
-        if self.permission_manager.requires_trust_token(ActionCategory.EXTERNAL_COMMUNICATION, contact):
-            return (f"TRUST_TOKEN_REQUIRED:call:{contact}|{message}", True)
-
-        from ai_brain.communications import WhatsAppClient
-        return (WhatsAppClient().make_call(contact, message), True)
-
-    def _handle_general_answer(self, args: dict) -> Tuple[str, bool]:
-        # Return False to let frontend / standard fallback handle it, OR return the LLM's direct answer
-        response = args.get("response", "")
-        if response:
-            return (response, True)
         return ("", False)
 
-    # ── Legacy Shell Handler ──────────────────────────────────────────────
+    # ── WhatsApp: turn 1 (resolve + ask) ─────────────────────────────────
+
+    def _try_parse_whatsapp_message(self, trimmed: str) -> Optional[Tuple[str, str]]:
+        """Recognizes several natural phrasings for a WhatsApp message, not
+        just the single rigid "X saying Y" form:
+            message saad saying hi
+            text saad saying hi
+            message saad "hi"          <- quoted, no "saying"
+            message saad: hi           <- colon-separated
+            message saad 'hi'          <- single-quoted
+
+        This is still simple keyword/pattern matching, not real language
+        understanding -- it will still miss less common phrasings. The LUNA
+        AI Brain directive's recommendation to eventually replace this whole
+        prefix-based dispatcher with Gemma 4 E4B function-calling (Part B.0)
+        is exactly for this reason: rigid pattern matching will always have
+        gaps like the one that was just found. This fix widens the gap, it
+        doesn't close the underlying problem.
+        """
+        lower = trimmed.lower()
+        for prefix in ("message ", "text "):
+            if not lower.startswith(prefix):
+                continue
+            body = trimmed[len(prefix):]
+            body_lower = body.lower()
+
+            # Form 1: "<contact> saying <message>"
+            if " saying " in body_lower:
+                idx = body_lower.index(" saying ")
+                contact = body[:idx].strip()
+                message = body[idx + len(" saying "):].strip()
+                if contact and message:
+                    return contact, message
+
+            # Form 2: "<contact> "<message>"" or "<contact> '<message>'"
+            # (straight double/single quotes, and common curly-quote variants)
+            for open_q, close_q in (('"', '"'), ("'", "'"), ("\u201c", "\u201d"), ("\u2018", "\u2019")):
+                if open_q in body and body.rstrip().endswith(close_q):
+                    q_start = body.index(open_q)
+                    contact = body[:q_start].strip()
+                    message = body[q_start + 1: body.rstrip().rfind(close_q)].strip()
+                    if contact and message:
+                        return contact, message
+
+            # Form 3: "<contact>: <message>"
+            if ":" in body:
+                idx = body.index(":")
+                contact = body[:idx].strip()
+                message = body[idx + 1:].strip()
+                if contact and message:
+                    return contact, message
+
+        return None
+
+    def _try_parse_whatsapp_call(self, lower: str, trimmed: str) -> Optional[Tuple[str, bool]]:
+        if lower.startswith("video call "):
+            contact = trimmed[len("video call "):].strip()
+            return (contact, True) if contact else None
+        if lower.startswith("call "):
+            contact = trimmed[len("call "):].strip()
+            return (contact, False) if contact else None
+        return None
+
+    def _start_whatsapp_message(self, contact: str, message: str) -> Tuple[str, bool]:
+        if self._whatsapp is None:
+            return ("WhatsApp automation isn't set up yet on this system.", True)
+        try:
+            pending = self._whatsapp.prepare_message(contact, message)
+        except (WhatsAppLaunchError, WhatsAppUIError) as e:
+            return (f"Couldn't prepare that message: {e}", True)
+
+        self._pending_whatsapp = pending
+        return (
+            f"Found {pending.matched_contact} on WhatsApp. Send: \"{pending.message}\"? "
+            f"Say yes to confirm or no to cancel.",
+            True,
+        )
+
+    def _start_whatsapp_call(self, contact: str, video: bool) -> Tuple[str, bool]:
+        if self._whatsapp is None:
+            return ("WhatsApp automation isn't set up yet on this system.", True)
+        try:
+            pending = self._whatsapp.prepare_call(contact, video=video)
+        except (WhatsAppLaunchError, WhatsAppUIError) as e:
+            return (f"Couldn't prepare that call: {e}", True)
+
+        self._pending_whatsapp = pending
+        kind = "video call" if video else "voice call"
+        return (
+            f"Found {pending.matched_contact} on WhatsApp. Place a {kind}? "
+            f"Say yes to confirm or no to cancel.",
+            True,
+        )
+
+    # ── WhatsApp: turn 2 (confirm/decline + execute) ─────────────────────
+
+    def _resolve_pending_whatsapp(self, lower: str) -> Tuple[str, bool]:
+        pending = self._pending_whatsapp
+
+        if lower in _AFFIRMATIVE:
+            self._pending_whatsapp = None  # clear BEFORE executing -- if execute()
+                                            # raises, we don't want a stale pending
+                                            # action left confirmable by a later "yes"
+            result: ActionResult = self._whatsapp.execute(pending)
+            if result.status == "error":
+                return (f"That didn't go through: {result.detail}", True)
+            return (result.detail, True)
+
+        if lower in _NEGATIVE:
+            self._pending_whatsapp = None
+            kind = "message" if pending.kind == "message" else "call"
+            return (f"Okay, {kind} to {pending.matched_contact} cancelled.", True)
+
+        # Anything else: treat the pending action as abandoned (don't leave
+        # it silently hanging forever waiting for a yes/no that never comes)
+        # and fall through to normal dispatch for whatever the user actually
+        # said. Re-dispatch once, now that _pending_whatsapp is cleared, so
+        # this doesn't recurse into itself.
+        logger.info(
+            "Pending WhatsApp %s to '%s' abandoned -- user said something else instead.",
+            pending.kind, pending.matched_contact,
+        )
+        self._pending_whatsapp = None
+        return self.dispatch(lower)
+
+    # ── Handler Methods ───────────────────────────────────────────────────
 
     def _handle_shell(self, raw_cmd: str) -> Tuple[str, bool]:
-        """Execute a shell command and return its output."""
         if not raw_cmd:
             return ("No command provided.", True)
-
         try:
             res = subprocess.run(
                 raw_cmd, shell=True,
                 capture_output=True, text=True, errors="replace",
             )
-            out = res.stdout.strip()
-            err = res.stderr.strip()
-            if res.returncode == 0:
-                return (f"Command executed successfully.\n{out}", True)
-            else:
-                return (f"Command failed (Code {res.returncode}).\n{err}", True)
+            out = (res.stdout or res.stderr or "Command executed successfully (exit code 0).").strip()
+            reply = f"[Command Result (Exit {res.returncode})]:\n{out}"
         except Exception as e:
-            return (f"Shell execution error: {e}", True)
+            reply = f"[Command Error]: {e}"
+        return (reply, True)
 
 
-    def execute_trust_token(self, token_str: str) -> str:
-        """Executes an action that was previously blocked by a trust token."""
-        parts = token_str.split(":", 2)
-        if len(parts) < 3:
-            return "Invalid trust token format."
-        _, action, data = parts
-        
+class _DefaultProcessChecker:
+    """Thin psutil-based process checker, used when the caller doesn't
+    supply their own. Matches the process-scanning approach AppCloser
+    already uses elsewhere in this file."""
+
+    def is_running(self, process_names: tuple) -> bool:
         try:
-            if action == "email":
-                parts = data.split("|")
-                to = parts[0] if len(parts) > 0 else ""
-                subject = parts[1] if len(parts) > 1 else ""
-                body = parts[2] if len(parts) > 2 else ""
-                from ai_brain.communications import EmailClient
-                from security.permissions import ActionCategory
-                self.permission_manager.grant_trust_token(ActionCategory.EXTERNAL_COMMUNICATION, to, "user_approved")
-                return EmailClient().send_email(to, subject, body)
-            elif action == "whatsapp":
-                parts = data.split("|", 1)
-                contact = parts[0] if len(parts) > 0 else ""
-                message = parts[1] if len(parts) > 1 else ""
-                from ai_brain.communications import WhatsAppClient
-                from security.permissions import ActionCategory
-                self.permission_manager.grant_trust_token(ActionCategory.EXTERNAL_COMMUNICATION, contact, "user_approved")
-                return WhatsAppClient().send_message(contact, message)
-            elif action == "call":
-                parts = data.split("|", 1)
-                contact = parts[0] if len(parts) > 0 else ""
-                message = parts[1] if len(parts) > 1 else ""
-                from ai_brain.communications import WhatsAppClient
-                from security.permissions import ActionCategory
-                self.permission_manager.grant_trust_token(ActionCategory.EXTERNAL_COMMUNICATION, contact, "user_approved")
-                return WhatsAppClient().make_call(contact, message)
-            return f"Unknown trust token action: {action}"
-        except Exception as e:
-            return f"Failed to execute trusted action: {e}"
+            import psutil
+        except ImportError:
+            return False
+        names_lower = {n.lower() for n in process_names}
+        for proc in psutil.process_iter(["name"]):
+            try:
+                if (proc.info["name"] or "").lower() in names_lower:
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return False

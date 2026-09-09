@@ -1,94 +1,208 @@
-"""AURIX AI Brain — Media Player Integration.
+"""AURIX AI Brain — Media Player Integration via PyAutoGUI.
 
-Provides capabilities to play music via Spotify Desktop (UI automation)
-or fallback to web browsers.
+Controls local media playback (Spotify & YouTube Music) using native 
+Windows media keys and official UI keyboard shortcuts.
 """
 
-import logging
 import os
-import subprocess
-from typing import Optional
+import time
+import urllib.parse
+import logging
 
 try:
-    import psutil
-    PSUTIL_AVAILABLE = True
+    import pyautogui
+    pyautogui.PAUSE = 0.15 
+    pyautogui.FAILSAFE = True
+    PYAUTOGUI_AVAILABLE = True
 except ImportError:
-    psutil = None
-    PSUTIL_AVAILABLE = False
-
-from core_engine import UiaController
+    PYAUTOGUI_AVAILABLE = False
 
 logger = logging.getLogger("aurix.ai_brain.media_player")
 
-class MediaPlayer:
-    def __init__(self):
-        self.uia = UiaController()
+# ─── TIMING & UI TARGETING CONFIGURATION ─────────────────────────────
+SPOTIFY_LOAD_DELAY = 4.0      # Increased for first-time cold boots
+SPOTIFY_SEARCH_DELAY = 1.5    
+SPOTIFY_PAGE_DELAY = 1.0      
+YT_MUSIC_LOAD_DELAY = 6.0     # Increased for browser cold boots
+YT_MUSIC_SEARCH_DELAY = 2.0   # Wait for search results to load
+YT_MUSIC_TAB_COUNT = 4        # Adjusted for the '/' shortcut starting position
+# ─────────────────────────────────────────────────────────────────────
 
-    def _is_spotify_running(self) -> bool:
-        if not PSUTIL_AVAILABLE:
-            return False
-        for proc in psutil.process_iter(['name']):
-            if proc.info['name'] and proc.info['name'].lower() == 'spotify.exe':
-                return True
-        return False
+class MediaPlayer:
+    """Automates media playback via desktop apps or web fallback."""
+
+    def __init__(self):
+        pass
+
+    # Note: Global Windows media keys are used here instead of app-specific 
+    # shortcuts (like 'J' or 'Space') so Luna can control the music even 
+    # when the app is minimized in the background.
+    def toggle_playback(self) -> str:
+        if not PYAUTOGUI_AVAILABLE: return "PyAutoGUI not installed."
+        pyautogui.press("playpause")
+        return "Toggled play/pause."
+
+    def next_track(self) -> str:
+        if not PYAUTOGUI_AVAILABLE: return "PyAutoGUI not installed."
+        pyautogui.press("nexttrack")
+        return "Skipped to next track."
+
+    def prev_track(self) -> str:
+        if not PYAUTOGUI_AVAILABLE: return "PyAutoGUI not installed."
+        pyautogui.press("prevtrack")
+        return "Returned to previous track."
 
     def play(self, query: str, service: str = "spotify") -> str:
-        """Play a song/artist/playlist using the given service."""
-        lower_service = service.lower()
+        if not PYAUTOGUI_AVAILABLE:
+            return "PyAutoGUI not installed."
 
-        if lower_service == "spotify":
-            if self._is_spotify_running():
-                try:
-                    # Bring Spotify to front and automate
-                    if self.uia.find_window_by_title("Spotify"):
-                        import time
-                        # Click search (Ctrl+K or similar in Spotify, or find search box)
-                        # We'll use the UIA controller to find the "Search" box
-                        success = self.uia.set_focus_and_type("Spotify", "Search", query)
-                        if success:
-                            time.sleep(0.5)
-                            self.uia.send_enter_key("Spotify")
-                            time.sleep(1.0)
-                            # Assuming "Play" or "Top result" can be invoked or hit Enter again
-                            # For simplicity, sending a second Enter on the search result or invoking "Play"
-                            # We can just try to press Tab and Enter or use media keys
-                            # A simple play pause media key can work if Spotify is focused
-                            self.uia.send_enter_key("Spotify")
-                            return f"Playing '{query}' on Spotify."
-                except Exception as e:
-                    logger.warning(f"Spotify UI automation failed: {e}")
-            
-            # Fallback to web
-            url = f"https://open.spotify.com/search/{query.replace(' ', '%20')}"
-            self._open_url(url)
-            return f"Opened Spotify web search for '{query}'."
-
-        elif lower_service == "youtube":
-            url = f"https://www.youtube.com/results?search_query={query.replace(' ', '+')}"
-            self._open_url(url)
-            return f"Searching YouTube for '{query}'."
-
+        service = service.lower().strip()
+        if service == "spotify":
+            return self._play_spotify(query)
+        elif service in ["youtube", "yt", "youtube music", "yt music"]:
+            return self._play_youtube_music(query)
         else:
-            url = f"https://www.google.com/search?q={query.replace(' ', '+')}+music"
-            self._open_url(url)
-            return f"Searching web for '{query}'."
+            return f"Service '{service}' is not supported yet."
 
-    def pause(self, service: str = "spotify") -> str:
-        """Pause media."""
-        # The easiest way to pause media system-wide is sending VK_MEDIA_PLAY_PAUSE
-        # But we cannot easily import windows_sys here since it's a rust dependency, not a python one.
-        # Let's use powershell to press media play pause.
+    def start_spotify_dj(self) -> str:
+        logger.info("MediaPlayer: Attempting to launch Spotify DJ.")
         try:
-            import ctypes
-            # VK_MEDIA_PLAY_PAUSE is 0xB3
-            ctypes.windll.user32.keybd_event(0xB3, 0, 0, 0)
-            ctypes.windll.user32.keybd_event(0xB3, 0, 0x0002, 0)
-            return "Toggled play/pause."
-        except Exception:
-            return "Failed to toggle media."
+            os.startfile("spotify:")
+            time.sleep(SPOTIFY_LOAD_DELAY)
+            
+            # Use official shortcut: Go to Made For You (Alt + Shift + M)
+            pyautogui.hotkey("alt", "shift", "m")
+            time.sleep(1.5)
+            
+            # The DJ is typically the first card on the Made For You page
+            pyautogui.press("tab")
+            time.sleep(0.2)
+            
+            # First Enter: Opens the DJ
+            pyautogui.press("enter")
+            time.sleep(SPOTIFY_PAGE_DELAY)
+            
+            # Second Enter: Starts playback
+            pyautogui.press("enter")
+            
+            return "Started Spotify DJ via Made For You shortcut."
+        except Exception as e:
+            return f"Spotify DJ automation failed: {e}"
 
-    def _open_url(self, url: str) -> None:
-        if os.name == 'nt':
-            os.startfile(url)
+    def _play_spotify(self, query: str) -> str:
+        logger.info("MediaPlayer: Attempting to play '%s' on Spotify.", query)
+        
+        try:
+            os.startfile("spotify:")
+            time.sleep(SPOTIFY_LOAD_DELAY)
+            
+            # Use official shortcut: Open Quick Search (Ctrl + K)
+            pyautogui.hotkey("ctrl", "k")
+            time.sleep(0.5)
+            
+            # Type the query
+            pyautogui.write(query, interval=0.03)
+            time.sleep(SPOTIFY_SEARCH_DELAY)
+            
+            # First Enter: Opens the top result (Playlist, Album, Artist, etc.)
+            pyautogui.press("enter")
+            time.sleep(SPOTIFY_PAGE_DELAY)
+            
+            # Second Enter: Starts playing the track/playlist
+            pyautogui.press("enter")
+            
+            return f"Playing '{query}' on Spotify Desktop."
+            
+        except Exception as e:
+            logger.error("Spotify automation failed: %s", e)
+            return f"Spotify UI automation failed: {e}"
+
+    def _play_youtube_music(self, query: str) -> str:
+        logger.info("MediaPlayer: Attempting to play '%s' on YT Music.", query)
+        
+        try:
+            # 1. Launch the base YT Music homepage
+            os.startfile("https://music.youtube.com")
+            time.sleep(YT_MUSIC_LOAD_DELAY)
+            
+            # 2. Use official shortcut: Open Search (/)
+            pyautogui.press("/")
+            time.sleep(0.5)
+            
+            # 3. Type query and search
+            pyautogui.write(query, interval=0.03)
+            time.sleep(0.3)
+            pyautogui.press("enter")
+            time.sleep(YT_MUSIC_SEARCH_DELAY)
+            
+            # 4. Tab from the search bar down to the Top Result play button
+            for _ in range(YT_MUSIC_TAB_COUNT):
+                pyautogui.press("tab")
+                time.sleep(0.15) 
+                
+            pyautogui.press("enter")
+            return f"Playing '{query}' on YouTube Music."
+            
+        except Exception as e:
+            logger.error("YouTube Music automation failed: %s", e)
+            return f"YouTube Music automation failed: {e}"
+
+
+def media_player(parameters: dict, response=None, player=None, session_memory=None) -> str:
+    params = parameters or {}
+    action = params.get("action", "play").lower().strip()
+    query = params.get("query", "").strip()
+    service = params.get("service", "spotify").strip()
+
+    player_ctrl = MediaPlayer()
+
+    if action in ["pause", "playpause", "stop"]:
+        result = player_ctrl.toggle_playback()
+    elif action in ["next", "skip"]:
+        result = player_ctrl.next_track()
+    elif action in ["prev", "previous", "back"]:
+        result = player_ctrl.prev_track()
+    elif action == "dj":
+        result = player_ctrl.start_spotify_dj()
+    elif action == "play":
+        if not query:
+            result = player_ctrl.toggle_playback()
         else:
-            subprocess.Popen(['xdg-open', url])
+            result = player_ctrl.play(query, service)
+    else:
+        result = f"Unknown media action: '{action}'"
+
+    if player:
+        player.write_log(f"[Media] {result}")
+
+    print(f"[MediaPlayer] 🎵 {result}")
+    return result
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="[%(name)s] %(levelname)s: %(message)s")
+    print("AURIX Media Player Test Mode (Type 'exit' to quit)")
+    controller = MediaPlayer()
+
+    while True:
+        try:
+            raw_input = input("\n[Media Player] >>> ").strip()
+            if not raw_input or raw_input.lower() in ["exit", "quit"]: break
+
+            if raw_input.lower().startswith("play "):
+                print(controller.play(raw_input[5:].strip(), "spotify"))
+            elif raw_input.lower().startswith("yt "):
+                print(controller.play(raw_input[3:].strip(), "youtube"))
+            elif raw_input.lower() == "dj":
+                print(controller.start_spotify_dj())
+            elif raw_input.lower() in ["pause", "resume", "playpause", "stop"]:
+                print(controller.toggle_playback())
+            elif raw_input.lower() in ["next", "skip"]:
+                print(controller.next_track())
+            elif raw_input.lower() in ["prev", "back", "previous"]:
+                print(controller.prev_track())
+            else:
+                print("Commands: play <query>, yt <query>, dj, pause, next, prev")
+
+        except KeyboardInterrupt:
+            break
