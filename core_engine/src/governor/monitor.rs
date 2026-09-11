@@ -18,9 +18,9 @@ use crate::governor::atomic_state::{set_power_state, set_suspend_flag, PowerStat
 use crate::governor::idle_monitor::create_idle_monitor;
 
 // ─── Hardware Ceilings (Configurable defaults) ──────────────────────────────
-const ACTIVE_MAX_RAM_BYTES: u64 = 12 * 1024 * 1024 * 1024;  // 12.0 GiB Active
-const IDLE_MAX_RAM_BYTES: u64 = 135 * 1024 * 1024 * 102;   // 13.5 GiB Idle
-const ABSOLUTE_MAX_RAM_BYTES: u64 = 14 * 1024 * 1024 * 1024;// 14.0 GiB Absolute
+const ACTIVE_MAX_RAM_BYTES: u64 = 16 * 1024 * 1024 * 1024;  // 16.0 GiB Active
+const IDLE_MAX_RAM_BYTES: u64 = 17 * 1024 * 1024 * 102;   // 17.0 GiB Idle
+const ABSOLUTE_MAX_RAM_BYTES: u64 = 18 * 1024 * 1024 * 1024;// 18.0 GiB Absolute
 
 const ACTIVE_MAX_VRAM_BYTES: u64 = 6 * 1024 * 1024 * 1024;  // 6.0 GiB Active
 const IDLE_MAX_VRAM_BYTES: u64 = 7 * 1024 * 1024 * 1024;    // 7.0 GiB Idle
