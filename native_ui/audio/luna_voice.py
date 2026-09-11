@@ -199,9 +199,32 @@ def record_audio(
         except Exception:
             pass
 
-    chunk_size = int(sample_rate * 0.1)  # 100ms per block
+    # Determine native hardware sample rate to prevent MME error 34 / wave header errors on Windows
+    native_sr = sample_rate
+    try:
+        dev_info = sd.query_devices(kind="input")
+        if dev_info and "default_samplerate" in dev_info:
+            val = int(dev_info["default_samplerate"])
+            if val > 0:
+                native_sr = val
+    except Exception:
+        native_sr = sample_rate
+
+    read_chunk_size = int(native_sr * 0.1)  # 100ms per block at hardware native rate
     silence_chunks_needed = max(12, int(silence_limit / 0.1))
     timeout_chunks = int(initial_timeout / 0.1)
+
+    def _to_16k(c: np.ndarray) -> np.ndarray:
+        if native_sr == sample_rate:
+            return c
+        flat = c.flatten()
+        orig_len = len(flat)
+        target_len = int(round(orig_len * sample_rate / native_sr))
+        if target_len <= 0:
+            return np.array([], dtype=np.int16).reshape(0, 1)
+        orig_t = np.linspace(0, 1, orig_len, endpoint=False)
+        targ_t = np.linspace(0, 1, target_len, endpoint=False)
+        return np.interp(targ_t, orig_t, flat).astype(np.int16).reshape(-1, 1)
 
     pre_buffer = collections.deque(maxlen=6)  # 600ms pre-roll
     recorded_chunks = []
@@ -212,89 +235,130 @@ def record_audio(
 
     ambient_samples = []
 
-    try:
-        with sd.InputStream(samplerate=sample_rate, channels=1, dtype="int16") as stream:
-            # 1. Flush initial device-opening pop/click
-            stream.read(chunk_size)
+    # Stream creation with retry
+    stream = None
+    for attempt in range(3):
+        try:
+            stream = sd.InputStream(samplerate=native_sr, channels=1, dtype="int16")
+            stream.start()
+            break
+        except Exception as err:
+            logger.debug(f"InputStream open attempt {attempt + 1} failed: {err}")
+            time.sleep(0.15)
+            if attempt == 1 and native_sr != sample_rate:
+                native_sr = sample_rate
+                read_chunk_size = int(native_sr * 0.1)
 
-            # 2. Measure ambient noise across 300ms
-            for _ in range(3):
-                c, _ = stream.read(chunk_size)
+    if stream is None:
+        logger.error("Microphone recording error: Unable to open audio input stream.")
+        return None
+
+    try:
+        # 1. Flush initial device-opening pop/click
+        try:
+            stream.read(read_chunk_size)
+        except Exception:
+            pass
+
+        # 2. Measure ambient noise across 300ms
+        for _ in range(3):
+            try:
+                raw_c, _ = stream.read(read_chunk_size)
+                c = _to_16k(raw_c)
                 ambient_samples.append(float(np.sqrt(np.mean(c.astype(np.float32) ** 2))))
                 pre_buffer.append(c)
+            except Exception:
+                pass
 
+        if ambient_samples:
             ambient_floor = float(np.mean(ambient_samples))
-            # Clamp floor to reasonable bounds (10.0 to 80.0)
-            ambient_floor = max(10.0, min(80.0, ambient_floor))
+        else:
+            ambient_floor = 30.0
+        ambient_floor = max(10.0, min(80.0, ambient_floor))
 
-            # Speech onset thresholds: adaptive to room noise with hysteresis
-            onset_rms = max(26.0, ambient_floor * 1.55)
-            onset_peak = max(220.0, ambient_floor * 3.6)
+        # Speech onset thresholds: adaptive to room noise with hysteresis
+        onset_rms = max(26.0, ambient_floor * 1.55)
+        onset_peak = max(220.0, ambient_floor * 3.6)
 
-            # Silence cutoff threshold
-            cutoff_rms = max(16.0, ambient_floor * 1.20)
-            cutoff_peak = max(140.0, ambient_floor * 2.2)
+        # Silence cutoff threshold
+        cutoff_rms = max(16.0, ambient_floor * 1.20)
+        cutoff_peak = max(140.0, ambient_floor * 2.2)
 
-            logger.debug(
-                f"Audio calibrated: ambient_floor={ambient_floor:.1f}, "
-                f"onset_rms={onset_rms:.1f}, onset_peak={onset_peak:.1f}"
-            )
+        logger.debug(
+            f"Audio calibrated: ambient_floor={ambient_floor:.1f}, "
+            f"onset_rms={onset_rms:.1f}, onset_peak={onset_peak:.1f}"
+        )
 
-            while True:
-                chunk, _ = stream.read(chunk_size)
-                total_chunks += 1
+        while True:
+            try:
+                raw_chunk, _ = stream.read(read_chunk_size)
+            except Exception as read_err:
+                logger.warning(f"Microphone read finished or interrupted: {read_err}")
+                break
 
-                rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
-                max_val = float(np.max(np.abs(chunk)))
+            chunk = _to_16k(raw_chunk)
+            total_chunks += 1
 
-                # Speech onset detection
-                if not speech_started:
-                    pre_buffer.append(chunk)
+            rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
+            max_val = float(np.max(np.abs(chunk)))
 
-                    if rms > onset_rms or max_val > onset_peak:
-                        speech_started = True
-                        if on_status:
-                            try:
-                                on_status("Hearing speech...")
-                            except Exception:
-                                pass
-                        # Prepend pre-roll buffer to preserve start of speech
-                        recorded_chunks.extend(list(pre_buffer))
-                        consecutive_silence = 0
-                    elif total_chunks >= timeout_chunks:
-                        # User did not speak within initial timeout
-                        logger.info("Voice recording timed out: No speech detected.")
-                        return None
-                else:
-                    # Active recording mode
-                    recorded_chunks.append(chunk)
+            # Speech onset detection
+            if not speech_started:
+                pre_buffer.append(chunk)
 
-                    # Compute active speech duration (excluding pre-roll)
-                    active_speech_chunks = max(0, len(recorded_chunks) - len(pre_buffer))
-                    active_speech_secs = active_speech_chunks * 0.1
+                if rms > onset_rms or max_val > onset_peak:
+                    speech_started = True
+                    if on_status:
+                        try:
+                            on_status("Hearing speech...")
+                        except Exception:
+                            pass
+                    # Prepend pre-roll buffer to preserve start of speech
+                    recorded_chunks.extend(list(pre_buffer))
+                    consecutive_silence = 0
+                elif total_chunks >= timeout_chunks:
+                    # User did not speak within initial timeout
+                    logger.info("Voice recording timed out: No speech detected.")
+                    return None
+            else:
+                # Active recording mode
+                recorded_chunks.append(chunk)
 
-                    if rms < cutoff_rms and max_val < cutoff_peak:
-                        # Only count silence if user has spoken minimum required phrase duration
-                        if active_speech_secs >= min_speech_duration:
-                            consecutive_silence += 1
-                            if consecutive_silence >= silence_chunks_needed:
-                                # User finished speaking complete sentence
-                                logger.info(f"Speech finished after {len(recorded_chunks) * 0.1:.1f}s.")
-                                break
-                        else:
-                            consecutive_silence = 0
+                # Compute active speech duration (excluding pre-roll)
+                active_speech_chunks = max(0, len(recorded_chunks) - len(pre_buffer))
+                active_speech_secs = active_speech_chunks * 0.1
+
+                if rms < cutoff_rms and max_val < cutoff_peak:
+                    # Only count silence if user has spoken minimum required phrase duration
+                    if active_speech_secs >= min_speech_duration:
+                        consecutive_silence += 1
+                        if consecutive_silence >= silence_chunks_needed:
+                            # User finished speaking complete sentence
+                            logger.info(f"Speech finished after {len(recorded_chunks) * 0.1:.1f}s.")
+                            break
                     else:
                         consecutive_silence = 0
+                else:
+                    consecutive_silence = 0
 
-                    # Safety maximum duration
-                    if total_chunks * 0.1 >= max_record_time:
-                        logger.info("Reached maximum record duration limit.")
-                        break
+                # Safety maximum duration
+                if total_chunks * 0.1 >= max_record_time:
+                    logger.info("Reached maximum record duration limit.")
+                    break
 
     except Exception as e:
         logger.error(f"Microphone recording error: {e}")
         if not recorded_chunks:
             return None
+    finally:
+        try:
+            stream.stop()
+        except Exception:
+            pass
+        try:
+            stream.close()
+        except Exception:
+            pass
 
     if not recorded_chunks:
         return None
@@ -384,11 +448,33 @@ def speak(
 
                 # Synchronized Chunked Playback + Mic Interruption
                 wake_model = get_wake_model()
-                out_stream = sd.OutputStream(samplerate=sr, channels=1, dtype="float32")
-                in_stream = sd.InputStream(samplerate=16000, channels=1, dtype="int16", blocksize=1280)
+                out_stream = None
+                in_stream = None
+                try:
+                    out_stream = sd.OutputStream(samplerate=sr, channels=1, dtype="float32")
+                    out_stream.start()
+                except Exception as out_err:
+                    logger.debug(f"OutputStream open failed: {out_err}, using sd.play")
+                    sd.play(full_audio, sr)
+                    sd.wait()
+                    return False
 
-                out_stream.start()
-                in_stream.start()
+                # Try opening input stream for live interruptibility
+                mic_sr = 16000
+                try:
+                    dev_info = sd.query_devices(kind="input")
+                    if dev_info and "default_samplerate" in dev_info:
+                        mic_sr = int(dev_info["default_samplerate"])
+                except Exception:
+                    pass
+
+                mic_block = max(256, int(mic_sr * 0.08))
+                try:
+                    in_stream = sd.InputStream(samplerate=mic_sr, channels=1, dtype="int16", blocksize=mic_block)
+                    in_stream.start()
+                except Exception as in_err:
+                    logger.debug(f"Mic monitor disabled for speech: {in_err}")
+                    in_stream = None
 
                 chunk_size = int(sr * 0.08)  # 80ms audio slice
                 pos = 0
@@ -406,38 +492,48 @@ def speak(
                         pos = end
                         chunk_index += 1
 
-                        # Read mic in lockstep
-                        mic_data, _ = in_stream.read(1280)
+                        if in_stream is not None:
+                            try:
+                                mic_data, _ = in_stream.read(mic_block)
+                                if chunk_index > warmup_chunks:
+                                    flat = mic_data.flatten()
+                                    peak_val = np.max(np.abs(flat))
 
-                        if chunk_index > warmup_chunks:
-                            flat = mic_data.flatten()
-                            peak_val = np.max(np.abs(flat))
-
-                            # 1. Wake word model score (if available)
-                            score = 0.0
-                            if wake_model is not None:
-                                try:
-                                    pred = wake_model.predict(flat)
-                                    score = max(pred.values()) if pred else 0.0
-                                except Exception:
+                                    # 1. Wake word model score (if available)
                                     score = 0.0
+                                    if wake_model is not None:
+                                        try:
+                                            pred = wake_model.predict(flat)
+                                            score = max(pred.values()) if pred else 0.0
+                                        except Exception:
+                                            score = 0.0
 
-                            # 2. Voice interruption trigger (wake word or sharp speech onset)
-                            if score > 0.15 or (score > 0.08 and peak_val > 10000) or peak_val > 18000:
-                                interrupted = True
-                                if wake_model is not None:
-                                    try:
-                                        wake_model.reset()
-                                    except Exception:
-                                        pass
-                                print("\n\u26a1 [Luna Interrupted!]")
-                                break
+                                    # 2. Voice interruption trigger (wake word or sharp speech onset)
+                                    if score > 0.15 or (score > 0.08 and peak_val > 10000) or peak_val > 18000:
+                                        interrupted = True
+                                        if wake_model is not None:
+                                            try:
+                                                wake_model.reset()
+                                            except Exception:
+                                                pass
+                                        print("\n⚡ [Luna Interrupted!]")
+                                        break
+                            except Exception:
+                                pass
 
                 finally:
-                    out_stream.stop()
-                    out_stream.close()
-                    in_stream.stop()
-                    in_stream.close()
+                    if out_stream is not None:
+                        try:
+                            out_stream.stop()
+                            out_stream.close()
+                        except Exception:
+                            pass
+                    if in_stream is not None:
+                        try:
+                            in_stream.stop()
+                            in_stream.close()
+                        except Exception:
+                            pass
 
                 if interrupted:
                     # Immediate female acknowledgment

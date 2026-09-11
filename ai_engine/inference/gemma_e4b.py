@@ -364,9 +364,16 @@ class GemmaModelRunner:
     ) -> str:
         """Format grounded multi-modal context into official Gemma chat template."""
         sys_prompt = system_instruction or (
-            "You are LUNA, a secure, autonomous, edge-governed desktop AI executive. "
-            "You have direct access to local system tools within the sandboxed environment. "
-            "Formulate accurate, structured, and safe actions."
+            "You are AURIX, a local Windows desktop AI assistant running directly "
+            "on the user's own computer. You are NOT Alibaba Cloud, ChatGPT, Qwen, "
+            "a cloud assistant, or a remote service. "
+            "You can interact with the user's computer through AURIX tools. "
+            "When a tool action has already been handled by the AURIX tool system, "
+            "respond naturally about the result. "
+            "For normal conversation, answer naturally and helpfully. "
+            "Do not claim that you cannot access local applications merely because "
+            "you are an AI. Local computer permissions and security are handled by "
+            "AURIX's ToolExecutor and PermissionManager."
         )
 
         # Ground context
@@ -451,70 +458,233 @@ class GemmaModelRunner:
             except Exception as e:
                 logger.error(f"Inference error: {e}. Yielding fallback response.")
                 reply = self._fallback_generate(prompt)
-
-        # Update rolling history for multi-turn context (capped to prevent RAM bloat)
-        self._history.append({"role": "user", "content": prompt})
-        self._history.append({"role": "assistant", "content": reply})
-        # Keep only the last 20 messages (10 exchanges) to bound memory usage
+        return reply
+    def chat(self,user_message: str,system_instruction: Optional[str] = None,max_new_tokens: int = 256,temperature: float = 0.7,top_p: float = 0.9,) -> str:
+        """Natural conversation API with clean rolling history.
+        Only the raw user message and final assistant reply are stored.
+        Formatted prompts, tool-routing prompts, and system instructions are
+        never written into conversation history.
+        """
+        if not user_message or not user_message.strip():
+            return ""
+        clean_message = user_message.strip()
+        prompt = self.format_chat_prompt(
+            user_message=clean_message,
+            system_instruction=system_instruction,
+        )
+        reply = self.generate_response(
+            prompt=prompt,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        self._history.append(
+            {
+                "role": "user",
+                "content": clean_message,
+            }
+        )
+        self._history.append(
+            {
+                "role": "assistant",
+                "content": reply,
+            }
+        )
+        # 20 messages = approximately 10 conversation exchanges.
         if len(self._history) > 20:
             self._history = self._history[-20:]
+
         return reply
+    
+    def remember_exchange(self,user_message: str,assistant_message: str,) -> None:
+        """Record an externally produced tool/action exchange in chat memory."""
+
+        if user_message and user_message.strip():
+            self._history.append(
+                {
+                    "role": "user",
+                    "content": user_message.strip(),
+                }
+            )
+
+        if assistant_message and assistant_message.strip():
+            self._history.append(
+                {
+                    "role": "assistant",
+                    "content": assistant_message.strip(),
+                }
+            )
+
+        if len(self._history) > 20:
+            self._history = self._history[-20:]
 
     def select_tool(self, text: str) -> dict:
+        """Use the local LLM as AURIX's natural-language action router."""
+
         import json
+        import re
+
         from ai_brain.tool_schema import TOOLS
 
-        sys_prompt = (
-            "You are a helpful assistant with access to the following tools.\n"
-            f"{json.dumps(TOOLS, indent=2)}\n"
-            "You must respond with ONLY a valid JSON object representing the tool to call. "
-            "Do not include any prose, explanations, or markdown formatting (like ```json).\n"
-            "Format: {\"tool\": \"<tool_name>\", \"args\": {\"<param>\": \"<value>\"}}"
+        if not text or not text.strip():
+            return {
+                "tool": "general_answer",
+                "args": {},
+            }
+
+        system_prompt = (
+            "You are AURIX's INTERNAL ACTION ROUTER.\n"
+            "You are NOT speaking directly to the user.\n\n"
+
+            "AURIX is a LOCAL WINDOWS DESKTOP ASSISTANT running on the user's "
+            "own computer. It has real local tools that can open applications, "
+            "close applications, read files, control media, send messages, and "
+            "perform other desktop actions.\n\n"
+
+            "IMPORTANT:\n"
+            "- DO NOT refuse desktop actions.\n"
+            "- DO NOT discuss security policy.\n"
+            "- DO NOT claim you are Alibaba Cloud, Qwen, ChatGPT, or a cloud AI.\n"
+            "- DO NOT explain how the user can perform the action manually.\n"
+            "- Your ONLY job is to SELECT A TOOL.\n"
+            "- ToolExecutor and PermissionManager handle actual security.\n\n"
+
+            "AVAILABLE TOOLS:\n"
+            f"{json.dumps(TOOLS, indent=2)}\n\n"
+
+            "ROUTING RULES:\n"
+            "1. If the user asks to open, launch, start, or access an application, "
+            "use open_app.\n"
+            "2. If the user asks to close, quit, exit, or stop an application, "
+            "use close_app.\n"
+            "3. Use general_answer ONLY when no computer action is required.\n"
+            "4. Understand informal English, Roman Urdu, Urdu-style English, "
+            "and conversational wording.\n"
+            "5. Never invent a tool.\n"
+            "6. Prefer a dedicated tool over shell_exec.\n"
+            "7. Return ONLY valid JSON.\n\n"
+
+            "EXAMPLES:\n"
+
+            'User: open WhatsApp\n'
+            'Assistant: {"tool":"open_app","args":{"target":"whatsapp"}}\n\n'
+
+            'User: WhatsApp khol do\n'
+            'Assistant: {"tool":"open_app","args":{"target":"whatsapp"}}\n\n'
+
+            'User: open Notepad\n'
+            'Assistant: {"tool":"open_app","args":{"target":"notepad"}}\n\n'
+
+            'User: chrome zara open kar do\n'
+            'Assistant: {"tool":"open_app","args":{"target":"chrome"}}\n\n'
+
+            'User: close Chrome\n'
+            'Assistant: {"tool":"close_app","args":{"target":"chrome"}}\n\n'
+
+            'User: what is artificial intelligence?\n'
+            'Assistant: {"tool":"general_answer","args":{}}\n\n'
+
+            "OUTPUT FORMAT:\n"
+            '{"tool":"tool_name","args":{}}'
         )
 
-        # FIX: this was calling self.format_prompt(user_input=..., sys_prompt=...),
-        # which doesn't exist on this class. The real method is format_chat_prompt()
-        # with different parameter names.
         prompt = self.format_chat_prompt(
-            user_message=text,
-            system_instruction=sys_prompt,
-            context_history=[],  # tool selection must not be biased by prior chat
+            user_message=text.strip(),
+            system_instruction=system_prompt,
+            context_history=list(self._history[-6:]),
         )
 
-        # generate_response() unconditionally appends every call to self._history.
-        # Tool-selection round trips (the raw schema prompt + raw JSON reply) are
-        # not real conversation and must not leak into later chat prompts, so
-        # snapshot history here and restore it after, regardless of outcome.
-        saved_history = list(self._history)
         raw_reply = ""
-        try:
-            for attempt in range(2):
-                raw_reply = self.generate_response(prompt, temperature=0.0, max_new_tokens=256)
 
-                clean_reply = raw_reply.strip()
-                if clean_reply.startswith("```json"):
-                    clean_reply = clean_reply[7:]
-                if clean_reply.startswith("```"):
-                    clean_reply = clean_reply[3:]
-                if clean_reply.endswith("```"):
-                    clean_reply = clean_reply[:-3]
-                clean_reply = clean_reply.strip()
+        for attempt in range(2):
 
-                try:
-                    result = json.loads(clean_reply)
-                    if "tool" in result:
-                        if "args" not in result:
-                            result["args"] = {}
-                        return result
-                except json.JSONDecodeError:
-                    logger.warning(f"Failed to parse tool selection JSON: {raw_reply}")
+            raw_reply = self.generate_response(
+                prompt=prompt,
+                temperature=0.0,
+                max_new_tokens=256,
+            )
+
+            cleaned = raw_reply.strip()
+
+            # Remove accidental markdown fences.
+            if cleaned.startswith("```json"):
+                cleaned = cleaned[7:]
+
+            elif cleaned.startswith("```"):
+                cleaned = cleaned[3:]
+
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+
+            cleaned = cleaned.strip()
+
+            # Some smaller local models occasionally add text before/after JSON.
+            match = re.search(
+                r"\{[\s\S]*\}",
+                cleaned,
+            )
+
+            if match:
+                cleaned = match.group(0)
+
+            try:
+                result = json.loads(cleaned)
+
+            except json.JSONDecodeError:
+
+                logger.warning(
+                    "Tool router returned invalid JSON: %s",
+                    raw_reply,
+                )
 
                 if attempt == 0:
-                    prompt += raw_reply + "\nYour last reply was not valid JSON. Reply with ONLY valid JSON."
+                    prompt += (
+                        "\n\nIMPORTANT: Your previous response was invalid. "
+                        "Return ONLY the JSON object. No prose."
+                    )
 
-            return {"tool": "general_answer", "args": {"response": raw_reply}}
-        finally:
-            self._history = saved_history
+                continue
+
+            if not isinstance(result, dict):
+                continue
+
+            tool = result.get("tool")
+            args = result.get("args", {})
+
+            if not isinstance(tool, str):
+                continue
+
+            if not isinstance(args, dict):
+                args = {}
+
+            # Validate against the actual registry.
+            valid_tools = {
+                item["name"]
+                for item in TOOLS
+            }
+
+            if tool not in valid_tools:
+
+                logger.warning(
+                    "Model attempted unknown tool: %s",
+                    tool,
+                )
+
+                return {
+                    "tool": "general_answer",
+                    "args": {},
+                }
+
+            return {
+                "tool": tool,
+                "args": args,
+            }
+
+        # Never execute malformed hallucinated output.
+        return {
+            "tool": "general_answer",
+            "args": {},
+        }
 
 
     def _init_ollama(self, model_name: str) -> bool:

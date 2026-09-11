@@ -220,6 +220,7 @@ class GeneralSyntheticDataGenerator:
         config_path: str = "config/luna.toml",
         output_path: str = "data/synthetic_general.jsonl",
         system_state_provider: Optional[Callable[[], Union[str, int]]] = None,
+        get_power_state_fn: Optional[Callable[[], Union[str, int]]] = None,
     ) -> None:
         """
         Args:
@@ -235,11 +236,12 @@ class GeneralSyntheticDataGenerator:
                 are called without an explicit power_state. If not supplied, an
                 explicit power_state MUST be passed on every call, or generation
                 is refused (fail closed) -- see GeneratorPowerStateUnknownError.
+            get_power_state_fn: Alias for system_state_provider.
         """
         self.model_runner = model_runner
         self.config_path = config_path
         self.output_path = output_path
-        self.system_state_provider = system_state_provider
+        self.system_state_provider = system_state_provider or get_power_state_fn
         self.weights = load_training_weights_from_config(config_path)
 
     @property
@@ -310,10 +312,9 @@ class GeneralSyntheticDataGenerator:
         # If model runner is loaded with real weights, generate dynamically
         if (
             self.model_runner is not None
-            and hasattr(self.model_runner, "is_loaded")
-            and self.model_runner.is_loaded
-            and getattr(self.model_runner, "model", None) is not None
+            and getattr(self.model_runner, "is_loaded", False)
             and not getattr(self.model_runner, "is_fallback", False)
+            and (getattr(self.model_runner, "model", None) is not None or not hasattr(self.model_runner, "model"))
         ):
             prompt = (
                 f"You are a master software engineering and systems educator. "

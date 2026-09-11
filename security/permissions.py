@@ -59,7 +59,7 @@ class PermissionManager:
     """Evaluates agent execution intents against security policies and trust token requirements."""
 
     # Actions inherently destructive or high risk that mandate human Trust Token authorization
-    HIGH_RISK_CATEGORIES: Set[ActionCategory] = {
+    HIGH_RISK_CATEGORIES = {
         ActionCategory.FILE_DELETE,
         ActionCategory.CHECKPOINT_RESTORE,
         ActionCategory.SYSTEM_SETTING,
@@ -88,20 +88,94 @@ class PermissionManager:
         """Issue and grant a Trust Token upon explicit human approval."""
         return self.issue_trust_token(category, target_resource, ttl_seconds=ttl_seconds)
 
-    def requires_trust_token(self, category: ActionCategory, target_resource: str, command_text: Optional[str] = None) -> bool:
-        """Determine if an action requires explicit interactive human approval."""
+    def requires_trust_token(self,category: ActionCategory,target_resource: str,command_text: Optional[str] = None,) -> bool:
+        """Determine whether explicit human approval is required."""
+
+        security_cfg = self.config.get(
+            "security",
+            {},
+        )
+
+        permissions_cfg = security_cfg.get(
+            "permissions",
+            {},
+        )
+
+        # Master security switch.
+        security_enabled = security_cfg.get(
+            "trust_token_required",
+            True,
+        )
+
+        if not security_enabled:
+            return False
+
+        # ---------------------------------------------------------
+        # ALWAYS HIGH RISK
+        # ---------------------------------------------------------
+
         if category in self.HIGH_RISK_CATEGORIES:
             return True
 
-        if category == ActionCategory.EXTERNAL_COMMUNICATION:
-            perms = self.config.get("security", {}).get("permissions", {})
-            return perms.get("require_trust_token_for_comms", False)
+        # ---------------------------------------------------------
+        # EXTERNAL COMMUNICATION
+        # WhatsApp / Email / Calls
+        # ---------------------------------------------------------
 
-        # Check shell exec destructive commands
-        if category == ActionCategory.SHELL_EXEC and command_text:
-            dangerous_triggers = ["rm ", "del ", "rmdir", "format ", "mkfs", "drop table", "shutdown", "reboot"]
-            if any(term in command_text.lower() for term in dangerous_triggers):
+        if category == ActionCategory.EXTERNAL_COMMUNICATION:
+
+            return permissions_cfg.get(
+                "require_trust_token_for_comms",
+                True,
+            )
+
+        # ---------------------------------------------------------
+        # SHELL COMMANDS
+        # ---------------------------------------------------------
+
+        if category == ActionCategory.SHELL_EXEC:
+
+            # Recommended:
+            # every shell command requires confirmation.
+            if permissions_cfg.get(
+                "require_trust_token_for_shell",
+                True,
+            ):
                 return True
+
+            # If global shell confirmation is disabled,
+            # still protect dangerous commands.
+            dangerous_triggers = [
+                "rm ",
+                "del ",
+                "erase ",
+                "rmdir",
+                "rd ",
+                "format ",
+                "mkfs",
+                "diskpart",
+                "drop table",
+                "drop database",
+                "shutdown",
+                "reboot",
+                "restart-computer",
+                "stop-computer",
+                "reg delete",
+                "bcdedit",
+            ]
+
+            command_lower = (
+                command_text or ""
+            ).lower()
+
+            return any(
+                trigger in command_lower
+                for trigger in dangerous_triggers
+            )
+
+        # ---------------------------------------------------------
+        # SAFE / NORMAL ACTIONS
+        # ---------------------------------------------------------
 
         return False
 

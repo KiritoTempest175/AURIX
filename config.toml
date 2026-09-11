@@ -3,16 +3,25 @@
 # ═══════════════════════════════════════════════════════════════════════════
 
 [security]
-# Whitelisted project directories accessible to the AURIX agent
+
 allowed_project_paths = [
     "G:/Websites By Ai/AURIX",
     "C:/Users/Zain/Projects"
 ]
+
 file_jail_enabled = true
 read_only_mode = false
 trust_token_required = true
 
+
+[security.permissions]
+
+require_trust_token_for_comms = true
+require_trust_token_for_shell = true
+
+
 [audio]
+
 microphone = "Default"
 whisper_model_path = "models/whisper/ggml-base.en.bin"
 whisper_language = "en"
@@ -28,23 +37,26 @@ piper_config_path = "models/piper/en_US-lessac-medium.onnx.json"
 piper_speed = 1.00
 auto_tts_reply = true
 
+
 [resources]
-# Maximum host RAM ceiling in GB before Governor suspends AI operations (Blueprint ceiling: 12GB)
+
 max_ram_gb = 16.0
-# Maximum discrete GPU VRAM ceiling in GB (Blueprint ceiling: 6GB)
 max_vram_gb = 6.0
 cpu_throttle_percent = 85.0
 poll_interval_ms = 1000
 suspend_on_overload = true
 
+
 [general]
+
 theme = "dark"
 offline_mode = true
 log_level = "info"
 log_file = "logs/aurix_session.log"
 
+
 [llm]
-# Model selection: qwen2.5:3b-instruct via local Ollama
+
 model_name = "qwen2.5:3b-instruct"
 model_alias = "Qwen 2.5 3B Instruct (Ollama)"
 effective_params = "3B"
@@ -54,6 +66,3 @@ quantization = "none"
 device = "cpu"
 temperature = 0.7
 top_p = 0.9
-
-
-

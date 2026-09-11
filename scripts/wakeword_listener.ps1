@@ -1,5 +1,6 @@
 # Continuous Offline Wake-Word Detection for "Hey Luna" / "Luna" / "Aurix" / "Wake Up"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$rec = $null
 try {
     Add-Type -AssemblyName System.Speech
     $rec = New-Object System.Speech.Recognition.SpeechRecognitionEngine
@@ -10,7 +11,6 @@ try {
         "luna", "hey luna", "okay luna", "hi luna", "hello luna",
         "wake up luna", "aurix", "wake up"
     ))
-
 
     $builder = New-Object System.Speech.Recognition.GrammarBuilder
     $builder.Append($choices)
@@ -26,9 +26,22 @@ try {
             if ($t.Length -gt 0) {
                 Write-Output "WAKEWORD_DETECTED:$t"
                 [Console]::Out.Flush()
+                try {
+                    $rec.RecognizeAsyncCancel()
+                    $rec.Dispose()
+                    $rec = $null
+                } catch {}
+                break
             }
         }
     }
 } catch {
     # Exit if audio device unavailable
+} finally {
+    if ($rec) {
+        try {
+            $rec.RecognizeAsyncCancel()
+            $rec.Dispose()
+        } catch {}
+    }
 }

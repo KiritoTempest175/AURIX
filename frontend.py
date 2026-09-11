@@ -659,8 +659,7 @@ class JarvisApp(tk.Tk):
                     self.gemma_runner, "is_available",
                     getattr(self.gemma_runner, "is_loaded", False),
                 ):
-                    prompt = self.gemma_runner.format_chat_prompt(user_message=text)
-                    reply = self.gemma_runner.generate_response(prompt)
+                    reply = self.gemma_runner.chat(user_message=text)
                 else:
                     reply = "AURIX inference engine is standing by."
             except Exception as err:
@@ -670,6 +669,40 @@ class JarvisApp(tk.Tk):
             self._response_queue.put((reply, now_str))
 
         threading.Thread(target=generate_job, daemon=True, name="AurixInferenceThread").start()
+
+    # ── Trust Token Security Handler ─────────────────────────────────
+    def _handle_trust_token_request(self, reply_text: str) -> str:
+        """Handle protected AURIX actions with explicit user confirmation."""
+
+        if not reply_text.startswith("TRUST_TOKEN_REQUIRED:"):
+            return reply_text
+
+        from tkinter import messagebox
+
+        parts = reply_text.split(":", 2)
+        description = parts[2] if len(parts) > 2 else "protected action"
+
+        approved = messagebox.askyesno(
+            "AURIX Security Confirmation",
+            (
+                "AURIX wants permission to perform:\n\n"
+                f"{description}\n\n"
+                "Allow this action?"
+            ),
+            parent=self,
+        )
+
+        if not approved:
+            return "Action cancelled by user."
+
+        if not self._brain:
+            return "Security action could not be completed."
+
+        try:
+            return self._brain.execute_trust_token(reply_text)
+        except Exception as exc:
+            logger.exception("Trust Token execution failed: %s", exc)
+            return "Protected action failed."
 
     # ── Poll Response Queue (AI responses + voice input) ─────────────
     def _poll_response_queue(self):
@@ -687,19 +720,7 @@ class JarvisApp(tk.Tk):
             reply_text, timestamp = self._response_queue.get_nowait()
 
             if reply_text.startswith("TRUST_TOKEN_REQUIRED:"):
-                parts = reply_text.split(":", 2)
-                action = parts[1] if len(parts) > 1 else "unknown"
-                from tkinter import messagebox
-                if messagebox.askyesno("Trust Token Required", f"AURIX requests permission to execute an external high-risk action: {action}\n\nDo you want to allow this?", parent=self):
-                    if self._brain:
-                        # We execute it in a background thread to not freeze UI
-                        def _exec():
-                            result = self._brain.execute_trust_token(reply_text)
-                            self._response_queue.put((result, datetime.now().strftime("%H:%M:%S")))
-                        threading.Thread(target=_exec, daemon=True).start()
-                else:
-                    self._append_terminal_line("Action blocked by user.", "dim")
-                continue
+                reply_text = self._handle_trust_token_request(reply_text)
 
             self._append_terminal_line(reply_text, "reply")
 
@@ -796,8 +817,7 @@ class JarvisApp(tk.Tk):
                 self.gemma_runner, "is_available",
                 getattr(self.gemma_runner, "is_loaded", False),
             ):
-                prompt = self.gemma_runner.format_chat_prompt(user_message=text)
-                return self.gemma_runner.generate_response(prompt)
+                return self.gemma_runner.chat(user_message=text)
             else:
                 return "AURIX inference engine is standing by."
         except Exception as err:
@@ -907,6 +927,23 @@ class JarvisApp(tk.Tk):
                     self._append_terminal_line_safe(f"User: {spoken_text}", "user")
 
                     reply = self._execute_user_turn(spoken_text)
+
+                    if reply.startswith("TRUST_TOKEN_REQUIRED:"):
+                        # Voice conversation runs in a worker thread, while Tkinter
+                        # dialogs must be created on the main UI thread.
+                        result_holder = {}
+                        done_event = threading.Event()
+
+                        def _ask_permission():
+                            try:
+                                result_holder["reply"] = self._handle_trust_token_request(reply)
+                            finally:
+                                done_event.set()
+
+                        self.after(0, _ask_permission)
+                        done_event.wait()
+                        reply = result_holder.get("reply", "Action cancelled by user.")
+
                     self._append_terminal_line_safe(f"AURIX: {reply}", "reply")
 
                     self.state_machine.transition_to(AssistantState.SPEAKING)

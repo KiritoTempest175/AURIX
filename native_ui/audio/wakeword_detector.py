@@ -74,6 +74,7 @@ class WakeWordDetector:
             except Exception:
                 pass
             self._process = None
+        time.sleep(0.15)
         logger.debug("Wake-Word Detector paused (mic released).")
 
     def resume_listening(self) -> None:
@@ -146,12 +147,21 @@ class WakeWordDetector:
                                     self.on_wake_detected(self.confirmation_echo)
                                 except Exception as err:
                                     logger.error(f"Error in wake handler: {err}")
-                            time.sleep(1.0)  # Debounce
+                            break
                 except Exception as e:
                     logger.debug(f"Wake listener process error: {e}")
-            
+                finally:
+                    if self._process:
+                        try:
+                            if self._process.poll() is None:
+                                self._process.terminate()
+                                self._process.wait(timeout=0.5)
+                        except Exception:
+                            pass
+                        self._process = None
+
             if not self._stop_requested.is_set():
-                time.sleep(2.0)
+                time.sleep(1.0)
 
 
 _GLOBAL_WAKEWORD_DETECTOR: Optional[WakeWordDetector] = None
