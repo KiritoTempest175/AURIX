@@ -26,6 +26,7 @@ import math
 import os
 import queue
 import random
+import re
 import subprocess
 import sys
 import threading
@@ -251,6 +252,9 @@ class JarvisApp(tk.Tk):
         self.power = 98
         self.listening = False
         self.mic_muted = False
+        self._current_assistant_state = AssistantState.SLEEPING if HAS_AUDIO else None
+        self._conversation_active = False
+        self._wave_phase = 0.0
 
         if HAS_PSUTIL:
             self.mem_total_gb = psutil.virtual_memory().total / (1024 ** 3)
@@ -399,9 +403,10 @@ class JarvisApp(tk.Tk):
         self.status_dot = tk.Canvas(row, width=8, height=8, bg=BG,
                                      highlightthickness=0)
         self.status_dot.pack(side="left", padx=(0, 6))
-        self.status_dot.create_oval(0, 0, 8, 8, fill=GREEN, outline="")
-        tk.Label(row, text="OPTIMAL", bg=BG, fg=CYAN_BRIGHT,
-                  font=mono(12, "bold")).pack(side="left")
+        self.status_dot.create_oval(0, 0, 8, 8, fill=TEXT_DIM, outline="")
+        self.status_lbl = tk.Label(row, text="STANDBY", bg=BG, fg=TEXT_DIM,
+                                   font=mono(12, "bold"))
+        self.status_lbl.pack(side="left")
 
         # right side: user chip only
         right = tk.Frame(header, bg=BG)
@@ -499,27 +504,29 @@ class JarvisApp(tk.Tk):
         bottom = tk.Frame(parent, bg=BG)
         bottom.grid(row=1, column=0, pady=(6, 10))
 
-        self.vbar_canvas = tk.Canvas(bottom, width=140, height=26, bg=BG,
+        self.vbar_canvas = tk.Canvas(bottom, width=280, height=36, bg=BG,
                                       highlightthickness=0)
         self.vbar_canvas.pack()
-        self._vbar_phase = [random.uniform(0, math.pi * 2) for _ in range(9)]
+        self._vbar_phase = [random.uniform(0, math.pi * 2) for _ in range(16)]
 
         self.cmd_pill = tk.Label(
-            bottom, text="\u25cf  AWAITING COMMAND...", bg=PANEL_BG,
-            fg=CYAN_BRIGHT, font=mono(11, "bold"), padx=22, pady=10,
-            highlightthickness=1, highlightbackground=LINE_BRIGHT, cursor="hand2")
-        self.cmd_pill.pack(pady=(14, 0))
+            bottom, text="\u25cf  STANDBY (Say \"Hey Luna\")", bg=PANEL_BG,
+            fg="#6ea4b0", font=mono(11, "bold"), padx=22, pady=10,
+            highlightthickness=1, highlightbackground=LINE, cursor="hand2")
+        self.cmd_pill.pack(pady=(12, 0))
         self.cmd_pill.bind("<Button-1>", self._toggle_listen)
 
     def _toggle_listen(self, event=None):
-        self.listening = not self.listening
-        if self.listening:
-            self.cmd_pill.config(text="\u25cf  LISTENING...", fg=AMBER,
-                                  highlightbackground=AMBER)
+        if not HAS_AUDIO or not self.state_machine:
+            return
+        if self._conversation_active:
+            self._stop_conversation_session(announced=True)
         else:
-            self.cmd_pill.config(text="\u25cf  AWAITING COMMAND...",
-                                  fg=CYAN_BRIGHT,
-                                  highlightbackground=LINE_BRIGHT)
+            self.mic_muted = False
+            self.mic_btn.config(text="\U0001F3A4", fg=CYAN_BRIGHT,
+                                 highlightbackground=LINE_BRIGHT)
+            self.mic_status_lbl.config(text="MIC LIVE", fg=TEXT_DIM)
+            self._start_voice_conversation(confirmation="I'm listening.")
 
     # ------------------------------------------------------------- RIGHT --
     def _build_right(self, parent):
@@ -606,13 +613,14 @@ class JarvisApp(tk.Tk):
             self.mic_btn.config(text="\U0001F507", fg=RED,
                                  highlightbackground=RED)
             self.mic_status_lbl.config(text="MIC MUTED", fg=RED)
+            if self._conversation_active:
+                self._stop_conversation_session(announced=False)
         else:
             self.mic_btn.config(text="\U0001F3A4", fg=CYAN_BRIGHT,
                                  highlightbackground=LINE_BRIGHT)
             self.mic_status_lbl.config(text="MIC LIVE", fg=TEXT_DIM)
-            # Trigger voice input when unmuting (if audio available)
             if HAS_AUDIO and self.state_machine:
-                self._run_voice_command_loop()
+                self._start_voice_conversation(confirmation="Microphone live.")
 
     # ── Command Dispatch (Text Entry → Backend AI) ───────────────────
     def _send_command(self, event=None):
@@ -717,89 +725,217 @@ class JarvisApp(tk.Tk):
 
         self.after(100, self._poll_response_queue)
 
-    # ── Voice Command Pipeline ───────────────────────────────────────
+    # ── Voice State & UI Synchronization ─────────────────────────────
+    def _apply_assistant_state_ui(self, state: AssistantState):
+        """Update all UI indicators based on AssistantState."""
+        self._current_assistant_state = state
+
+        # 1. Update Command Pill
+        if state == AssistantState.SLEEPING:
+            self.cmd_pill.config(
+                text="●  STANDBY (Say 'Hey Luna')",
+                fg="#6ea4b0",
+                highlightbackground=LINE,
+            )
+        elif state == AssistantState.LISTENING:
+            self.cmd_pill.config(
+                text="●  LISTENING... (Speak now)",
+                fg=AMBER,
+                highlightbackground=AMBER,
+            )
+        elif state == AssistantState.THINKING:
+            self.cmd_pill.config(
+                text="●  THINKING...",
+                fg=CYAN_BRIGHT,
+                highlightbackground=CYAN,
+            )
+        elif state == AssistantState.EXECUTING:
+            self.cmd_pill.config(
+                text="●  EXECUTING...",
+                fg=CYAN_BRIGHT,
+                highlightbackground=CYAN_BRIGHT,
+            )
+        elif state == AssistantState.SPEAKING:
+            self.cmd_pill.config(
+                text="●  SPEAKING...",
+                fg=GREEN,
+                highlightbackground=GREEN,
+            )
+
+        # 2. Update Header Status Dot & Label
+        if hasattr(self, "status_dot") and hasattr(self, "status_lbl"):
+            self.status_dot.delete("all")
+            if state == AssistantState.SLEEPING:
+                self.status_dot.create_oval(0, 0, 8, 8, fill=TEXT_DIM, outline="")
+                self.status_lbl.config(text="STANDBY", fg=TEXT_DIM)
+            elif state == AssistantState.LISTENING:
+                self.status_dot.create_oval(0, 0, 8, 8, fill=AMBER, outline="")
+                self.status_lbl.config(text="LISTENING", fg=AMBER)
+            elif state in (AssistantState.THINKING, AssistantState.EXECUTING):
+                self.status_dot.create_oval(0, 0, 8, 8, fill=CYAN_BRIGHT, outline="")
+                self.status_lbl.config(text="PROCESSING", fg=CYAN_BRIGHT)
+            elif state == AssistantState.SPEAKING:
+                self.status_dot.create_oval(0, 0, 8, 8, fill=GREEN, outline="")
+                self.status_lbl.config(text="SPEAKING", fg=GREEN)
+
     def _on_assistant_state_change(self, old_state, new_state):
         """Callback fired whenever voice assistant state changes."""
         logger.info("Voice State: %s -> %s", old_state.value, new_state.value)
+        self.after(0, lambda: self._apply_assistant_state_ui(new_state))
 
-    def _run_voice_command_loop(self, confirmation: Optional[str] = None):
-        """Core voice pipeline: SLEEPING → LISTENING → THINKING → EXECUTING → SPEAKING → SLEEPING."""
+    # ── Continuous Voice Conversation Pipeline ────────────────────────
+    def _execute_user_turn(self, text: str) -> str:
+        """Synchronously execute a single command turn during voice interaction."""
+        try:
+            if self._brain:
+                reply, handled = self._brain.dispatch(text)
+                if handled:
+                    return reply
+
+            if self.gemma_runner and getattr(
+                self.gemma_runner, "is_available",
+                getattr(self.gemma_runner, "is_loaded", False),
+            ):
+                prompt = self.gemma_runner.format_chat_prompt(user_message=text)
+                return self.gemma_runner.generate_response(prompt)
+            else:
+                return "AURIX inference engine is standing by."
+        except Exception as err:
+            return f"[Error]: {err}"
+
+    def _start_voice_conversation(self, confirmation: Optional[str] = None):
+        """Starts continuous conversation session."""
         if not HAS_AUDIO or not self.state_machine:
             self._append_terminal_line("Audio subsystem not available.", "dim")
             return
-
-        if not self.state_machine.is_sleeping():
-            logger.debug("Voice pipeline busy, current state: %s", self.state_machine.current_state.value)
+        if self._conversation_active:
             return
+        self._conversation_active = True
+        self._run_conversation_session(confirmation=confirmation)
 
-        def voice_worker():
+    def _stop_conversation_session(self, announced: bool = True):
+        """Gracefully stops active session and transitions to standby."""
+        self._conversation_active = False
+        if announced and HAS_AUDIO:
+            def _announce():
+                if self.state_machine:
+                    self.state_machine.transition_to(AssistantState.SPEAKING)
+                try:
+                    standby_text = "Going to standby mode."
+                    self._append_terminal_line_safe(f"AURIX: {standby_text}", "dim")
+                    speak(standby_text, interruptible=False)
+                finally:
+                    if self.state_machine:
+                        self.state_machine.transition_to(AssistantState.SLEEPING)
+                    if self.wakeword:
+                        self.wakeword.resume_listening()
+            threading.Thread(target=_announce, daemon=True, name="AurixStandbyAnnounce").start()
+        else:
+            if self.state_machine:
+                self.state_machine.transition_to(AssistantState.SLEEPING)
+            if self.wakeword:
+                self.wakeword.resume_listening()
+
+    def _run_conversation_session(self, confirmation: Optional[str] = None):
+        """Core continuous voice pipeline: keeps conversation active turn-by-turn."""
+        def session_worker():
+            self._conversation_active = True
+            if self.wakeword:
+                self.wakeword.pause_listening()
+
+            first_turn = True
             try:
-                # 1. LISTENING
-                self.state_machine.transition_to(AssistantState.LISTENING)
-                if self.wakeword:
-                    self.wakeword.pause_listening()
+                while self._conversation_active and not self.mic_muted:
+                    self.state_machine.transition_to(AssistantState.LISTENING)
 
-                if confirmation:
-                    self._append_terminal_line_safe(f"AURIX: {confirmation}", "reply")
-                    speak(confirmation, interruptible=False)
+                    if first_turn and confirmation:
+                        self._append_terminal_line_safe(f"AURIX: {confirmation}", "reply")
+                        speak(confirmation, interruptible=False)
 
-                audio_dir = os.path.join(ROOT_DIR, "data")
-                os.makedirs(audio_dir, exist_ok=True)
-                wav_path = os.path.join(audio_dir, "input.wav")
+                    audio_dir = os.path.join(ROOT_DIR, "data")
+                    os.makedirs(audio_dir, exist_ok=True)
+                    wav_path = os.path.join(audio_dir, "input.wav")
 
-                # 2. Record with adaptive silence cutoff (2.2s silence limit, 10s initial timeout)
-                rec = record_audio(
-                    filename=wav_path,
-                    sample_rate=16000,
-                    silence_limit=2.2,
-                    initial_timeout=10.0,
-                    min_speech_duration=0.8,
-                )
+                    # Wait up to 8.5s for follow-up turns (10s on first turn)
+                    timeout = 10.0 if first_turn else 8.5
+                    first_turn = False
 
-                if not rec:
-                    logger.info("Voice listening timed out (no speech detected).")
-                    speak("No command detected.", interruptible=False)
-                    self.state_machine.transition_to(AssistantState.SLEEPING)
-                    if self.wakeword:
-                        self.wakeword.resume_listening()
-                    return
+                    rec = record_audio(
+                        filename=wav_path,
+                        sample_rate=16000,
+                        silence_limit=2.0,
+                        initial_timeout=timeout,
+                        min_speech_duration=0.6,
+                    )
 
-                # 3. THINKING — STT Transcription
-                self.state_machine.transition_to(AssistantState.THINKING)
-                spoken_text = transcribe_audio(rec)
+                    if not rec or not self._conversation_active or self.mic_muted:
+                        # User stopped speaking / timeout reached -> Announce standby
+                        logger.info("Voice session silence timeout. Transitioning to standby.")
+                        standby_text = "Going to standby mode."
+                        self._append_terminal_line_safe(f"AURIX: {standby_text}", "dim")
+                        self.state_machine.transition_to(AssistantState.SPEAKING)
+                        try:
+                            speak(standby_text, interruptible=False)
+                        except Exception:
+                            pass
+                        break
 
-                if not spoken_text:
-                    speak("I couldn't hear that clearly. Please try again.", interruptible=False)
-                    self.state_machine.transition_to(AssistantState.SLEEPING)
-                    if self.wakeword:
-                        self.wakeword.resume_listening()
-                    return
+                    self.state_machine.transition_to(AssistantState.THINKING)
+                    spoken_text = transcribe_audio(rec)
 
-                # 4. Cancel phrase check
-                if is_cancel_phrase(spoken_text):
-                    logger.info("Voice command cancelled: '%s'", spoken_text)
-                    speak("Cancelled.", interruptible=False)
-                    self.state_machine.transition_to(AssistantState.SLEEPING)
-                    if self.wakeword:
-                        self.wakeword.resume_listening()
-                    return
+                    if not spoken_text:
+                        retry_text = "I didn't catch that."
+                        self._append_terminal_line_safe(f"AURIX: {retry_text}", "dim")
+                        self.state_machine.transition_to(AssistantState.SPEAKING)
+                        speak(retry_text, interruptible=False)
+                        continue
 
-                # 5. EXECUTING → dispatch through main command pipeline
-                self.state_machine.transition_to(AssistantState.EXECUTING)
-                self._voice_input_queue.put(spoken_text)
+                    # Check cancel / standby phrases
+                    lower_spoken = spoken_text.lower()
+                    if is_cancel_phrase(spoken_text) or any(
+                        w in lower_spoken for w in ("standby", "stand by", "go to sleep", "sleep now", "stop listening")
+                    ):
+                        logger.info("User requested standby: '%s'", spoken_text)
+                        cancel_text = "Going to standby mode."
+                        self._append_terminal_line_safe(f"User: {spoken_text}", "user")
+                        self._append_terminal_line_safe(f"AURIX: {cancel_text}", "dim")
+                        self.state_machine.transition_to(AssistantState.SPEAKING)
+                        speak(cancel_text, interruptible=False)
+                        break
+
+                    self.state_machine.transition_to(AssistantState.EXECUTING)
+                    self._append_terminal_line_safe(f"User: {spoken_text}", "user")
+
+                    reply = self._execute_user_turn(spoken_text)
+                    self._append_terminal_line_safe(f"AURIX: {reply}", "reply")
+
+                    self.state_machine.transition_to(AssistantState.SPEAKING)
+                    try:
+                        clean = re.sub(r"```[\s\S]*?```", "code omitted", reply)
+                        clean = re.sub(r"[\*_#\[\]\(\)`]", "", clean).strip()
+                        if clean:
+                            speak(clean[:300])
+                    except Exception as err:
+                        logger.error("TTS speech error: %s", err)
+
+                    time.sleep(0.3)
 
             except Exception as e:
-                logger.error("Voice pipeline error: %s", e, exc_info=True)
-                self.state_machine.transition_to(AssistantState.SLEEPING)
+                logger.error("Conversation session error: %s", e, exc_info=True)
+            finally:
+                self._conversation_active = False
+                if self.state_machine:
+                    self.state_machine.transition_to(AssistantState.SLEEPING)
                 if self.wakeword:
                     self.wakeword.resume_listening()
 
-        threading.Thread(target=voice_worker, daemon=True, name="AurixVoiceWorker").start()
+        threading.Thread(target=session_worker, daemon=True, name="AurixConversationSession").start()
 
     def _handle_wakeword_triggered(self, confirmation: str):
         """Triggered when offline wake-word detector spots 'Luna' or 'Hey Luna'."""
         logger.info("Wake-Word Event: %s", confirmation)
-        self._run_voice_command_loop(confirmation=confirmation)
+        if not self._conversation_active:
+            self._start_voice_conversation(confirmation=confirmation)
 
     def _append_terminal_line_safe(self, text: str, tag: str = None):
         """Thread-safe version — schedules on Tk main thread."""
@@ -900,20 +1036,52 @@ class JarvisApp(tk.Tk):
         c.delete("all")
         w = c.winfo_width()
         h = c.winfo_height()
+
+        state = getattr(self, "_current_assistant_state", None)
+        if not HAS_AUDIO or state is None:
+            state = AssistantState.SLEEPING
+
+        # Dynamic state styling
+        if state == AssistantState.LISTENING:
+            core_col = AMBER
+            state_text = "LISTEN"
+            rot_delta = 2.4
+            pulse_color = AMBER
+        elif state == AssistantState.THINKING:
+            core_col = CYAN_BRIGHT
+            state_text = "THINK"
+            rot_delta = 3.6
+            pulse_color = CYAN_BRIGHT
+        elif state == AssistantState.EXECUTING:
+            core_col = CYAN
+            state_text = "EXEC"
+            rot_delta = 2.8
+            pulse_color = CYAN
+        elif state == AssistantState.SPEAKING:
+            core_col = GREEN
+            state_text = "SPEAK"
+            rot_delta = 2.0
+            pulse_color = GREEN
+        else:  # SLEEPING / STANDBY
+            core_col = CYAN_DIM
+            state_text = "STANDBY"
+            rot_delta = 0.8
+            pulse_color = LINE_BRIGHT
+
         if w > 10 and h > 10:
             cx, cy = w / 2, h / 2
             R = min(w, h) * 0.42
-            ring = self._draw_ring  # local ref avoids repeated attr lookup
+            ring = self._draw_ring
 
             ring(c, cx, cy, R, LINE)
-            ring(c, cx, cy, R * 0.82, LINE_BRIGHT, dash=(4, 6))
+            ring(c, cx, cy, R * 0.82, LINE_BRIGHT if state == AssistantState.SLEEPING else core_col, dash=(4, 6))
             ring(c, cx, cy, R * 0.62, LINE)
             ring(c, cx, cy, R * 0.42, CYAN_DIM, dash=(3, 5))
 
             c.create_line(cx - R - 15, cy, cx + R + 15, cy, fill=LINE)
             c.create_line(cx, cy - R - 15, cx, cy + R + 15, fill=LINE)
 
-            # rotating orbit brackets
+            # Rotating orbit brackets
             a = math.radians(self._radar_angle)
             cos_a = math.cos(a)
             sin_a = math.sin(a)
@@ -922,44 +1090,123 @@ class JarvisApp(tk.Tk):
                 bx = cx + cos_a * sign * orbit_r
                 by = cy + sin_a * sign * orbit_r
                 c.create_line(bx - 8, by - 8, bx + 8, by + 8,
-                              fill=CYAN_BRIGHT, width=2)
+                              fill=core_col, width=2)
 
-            # pulse ring
+            # Pulse ring
             pulse_phase = (self._radar_angle % 60) / 60
             if pulse_phase < 0.95:
                 pulse_r = R * 0.3 + pulse_phase * R * 0.5
-                ring(c, cx, cy, pulse_r, CYAN_BRIGHT, width=1)
+                ring(c, cx, cy, pulse_r, pulse_color, width=1)
 
-            # Use pre-cached font tuples (mono() caches internally)
-            font_bold_14 = mono(14, "bold")
-            s = R * 0.16
+            # Central Core Box & Label
+            s = R * 0.17
             c.create_rectangle(cx - s, cy - s, cx + s, cy + s,
-                                outline=CYAN_BRIGHT, width=1)
-            c.create_text(cx, cy - 10, text="CORE", fill=CYAN_BRIGHT,
-                          font=font_bold_14)
-            c.create_text(cx, cy + 10, text="ACTIVE", fill=CYAN_BRIGHT,
-                          font=font_bold_14)
+                                outline=core_col, width=2 if state != AssistantState.SLEEPING else 1)
+            c.create_text(cx, cy - 10, text="CORE", fill=core_col,
+                          font=mono(13, "bold"))
+            c.create_text(cx, cy + 10, text=state_text, fill=core_col,
+                          font=mono(9 if len(state_text) > 7 else 11, "bold"))
 
-            self._radar_angle = (self._radar_angle + 1.8) % 360  # faster rotation to compensate lower FPS
+            self._radar_angle = (self._radar_angle + rot_delta) % 360
 
-        # voice bars
+        # ── Dynamic Multi-Layer Wave Visualizer ───────────────────────
         vc = self.vbar_canvas
         vc.delete("all")
         vw = vc.winfo_width()
-        if vw > 1:
-            n = 9
-            bw = vw / n
+        vh = vc.winfo_height()
+
+        if vw > 10 and vh > 5:
+            mid_y = vh / 2
+            self._wave_phase = getattr(self, "_wave_phase", 0.0) + 0.18
+            phase = self._wave_phase
+
+            num_bars = 16
+            bar_w = vw / num_bars
             phases = self._vbar_phase
-            sin = math.sin
-            for i in range(n):
-                phases[i] += 0.22  # slightly faster to compensate lower FPS
-                height = 4 + (sin(phases[i]) * 0.5 + 0.5) * 18
-                x0 = i * bw + bw * 0.3
-                x1 = x0 + bw * 0.4
-                y1 = 24
-                y0 = y1 - height
-                vc.create_rectangle(x0, y0, x1, y1, fill=CYAN_BRIGHT,
-                                     outline="")
+
+            if state == AssistantState.SLEEPING:
+                # Standby: gentle baseline ripple
+                wave_pts = []
+                for x in range(0, int(vw) + 8, 6):
+                    y = mid_y + math.sin(phase * 0.4 + x * 0.035) * 2.5
+                    wave_pts.extend([x, y])
+                if len(wave_pts) >= 4:
+                    vc.create_line(*wave_pts, fill=CYAN_DIM, width=1, smooth=True)
+
+                for i in range(num_bars):
+                    phases[i] += 0.08
+                    h_bar = 2 + (math.sin(phases[i]) * 0.5 + 0.5) * 4
+                    x0 = i * bar_w + bar_w * 0.35
+                    x1 = x0 + bar_w * 0.3
+                    vc.create_rectangle(x0, vh - h_bar, x1, vh, fill="#0e1f26", outline="")
+
+            elif state == AssistantState.LISTENING:
+                # Listening: reactive amber audio wave with microphone bursts
+                wave_pts_1 = []
+                wave_pts_2 = []
+                for x in range(0, int(vw) + 8, 6):
+                    y1 = mid_y + (math.sin(phase * 1.1 + x * 0.05) * 0.7 + math.sin(phase * 2.1 + x * 0.11) * 0.4) * 11
+                    y2 = mid_y + math.sin(phase * 1.5 + x * 0.08) * 6
+                    wave_pts_1.extend([x, y1])
+                    wave_pts_2.extend([x, y2])
+
+                if len(wave_pts_1) >= 4:
+                    vc.create_line(*wave_pts_1, fill=AMBER, width=2, smooth=True)
+                if len(wave_pts_2) >= 4:
+                    vc.create_line(*wave_pts_2, fill=CYAN_BRIGHT, width=1, smooth=True)
+
+                for i in range(num_bars):
+                    phases[i] += 0.22
+                    h_bar = 5 + (math.sin(phases[i]) * 0.5 + 0.5) * 19
+                    x0 = i * bar_w + bar_w * 0.3
+                    x1 = x0 + bar_w * 0.4
+                    vc.create_rectangle(x0, vh - h_bar, x1, vh, fill=AMBER, outline="")
+
+            elif state in (AssistantState.THINKING, AssistantState.EXECUTING):
+                # Thinking / Executing: swirling dual computation waves
+                wave_pts_1 = []
+                wave_pts_2 = []
+                for x in range(0, int(vw) + 8, 6):
+                    y1 = mid_y + math.sin(phase * 2.2 + x * 0.08) * 8
+                    y2 = mid_y + math.cos(phase * 1.6 + x * 0.08) * 8
+                    wave_pts_1.extend([x, y1])
+                    wave_pts_2.extend([x, y2])
+
+                if len(wave_pts_1) >= 4:
+                    vc.create_line(*wave_pts_1, fill=CYAN_BRIGHT, width=2, smooth=True)
+                if len(wave_pts_2) >= 4:
+                    vc.create_line(*wave_pts_2, fill=CYAN, width=1, dash=(4, 4), smooth=True)
+
+                for i in range(num_bars):
+                    phases[i] += 0.28
+                    h_bar = 4 + (math.sin(phases[i]) * 0.5 + 0.5) * 14
+                    x0 = i * bar_w + bar_w * 0.3
+                    x1 = x0 + bar_w * 0.4
+                    vc.create_rectangle(x0, vh - h_bar, x1, vh, fill=CYAN_BRIGHT, outline="")
+
+            elif state == AssistantState.SPEAKING:
+                # Speaking: rich, energetic speech audio waves
+                wave_pts_1 = []
+                wave_pts_2 = []
+                for x in range(0, int(vw) + 8, 6):
+                    env = math.sin((x / max(vw, 1)) * math.pi)
+                    y1 = mid_y + (math.sin(phase * 1.7 + x * 0.06) * 0.7 + math.sin(phase * 3.2 + x * 0.12) * 0.5) * (14 * env)
+                    y2 = mid_y + math.sin(phase * 1.2 + x * 0.08) * (8 * env)
+                    wave_pts_1.extend([x, y1])
+                    wave_pts_2.extend([x, y2])
+
+                if len(wave_pts_1) >= 4:
+                    vc.create_line(*wave_pts_1, fill=GREEN, width=2, smooth=True)
+                if len(wave_pts_2) >= 4:
+                    vc.create_line(*wave_pts_2, fill=CYAN_BRIGHT, width=1, smooth=True)
+
+                for i in range(num_bars):
+                    phases[i] += 0.24
+                    env = math.sin(((i + 1) / (num_bars + 1)) * math.pi)
+                    h_bar = 5 + (math.sin(phases[i]) * 0.5 + 0.5) * 23 * env
+                    x0 = i * bar_w + bar_w * 0.3
+                    x1 = x0 + bar_w * 0.4
+                    vc.create_rectangle(x0, vh - h_bar, x1, vh, fill=GREEN, outline="")
 
         self.after(66, self._tick_radar)  # ~15 FPS — smooth enough, 40% less CPU/RAM churn
 

@@ -99,8 +99,7 @@ class WhatsAppController:
         return ActionResult(status="sent", detail="Message sent successfully.", matched_contact=matched_name)
 
 
-    # ── SECURE METHODS (Currently Commented Out) ──────────────────────────
-    """
+    # ── SECURE TWO-TURN CONFIRMATION METHODS ──────────────────────────────
     def prepare_message(self, contact_query: str, message: str) -> PendingWhatsAppAction:
         if not PYAUTOGUI_AVAILABLE:
             raise WhatsAppLaunchError("PyAutoGUI is required but not installed.")
@@ -129,7 +128,7 @@ class WhatsAppController:
     def _execute_message(self, pending: PendingWhatsAppAction) -> ActionResult:
         try:
             time.sleep(0.3)
-            pyautogui.write(pending.message, interval=0.02)
+            pyautogui.write(pending.message or "", interval=0.02)
             time.sleep(0.3)
             pyautogui.press("enter")
         except Exception as e:
@@ -147,7 +146,6 @@ class WhatsAppController:
         except Exception as e:
             return ActionResult(status="error", detail=f"Failed: {e}", matched_contact=pending.matched_contact)
         return ActionResult(status="called", detail=f"{call_kind.capitalize()} placed.", matched_contact=pending.matched_contact)
-    """
 
     # ── Internal helpers ─────────────────────────────────────────────────
 

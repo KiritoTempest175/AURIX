@@ -164,16 +164,26 @@ def _handle_summarize(url: str) -> str:
     except Exception as e:
         logger.error("Transcript fetch failed: %s", e)
         return f"Failed to retrieve transcript: {e}"
-        
-        truncated = full_text[:80000] 
-        response = model.generate_content(f"Summarize this transcript:\n\n{truncated}")
-        
-        _save_summary_to_desktop(response.text, url)
-        
-        return response.text.strip()
-        
-    except ImportError:
-        return "Missing 'google-generativeai'. Transcript fetched, but cannot summarize."
+
+    try:
+        truncated = full_text[:12000]
+        # Attempt summarization via Gemma if available
+        summary_text = ""
+        try:
+            from ai_engine.inference.gemma_e4b import get_default_gemma_runner
+            runner = get_default_gemma_runner()
+            if runner and getattr(runner, "is_available", getattr(runner, "is_loaded", False)):
+                prompt = runner.format_chat_prompt(f"Please provide a clear and concise summary of this video transcript:\n\n{truncated}")
+                summary_text = runner.generate_response(prompt).strip()
+        except Exception:
+            summary_text = ""
+
+        if not summary_text:
+            # Clean fallback summary: first 500 characters
+            summary_text = f"Transcript overview:\n{full_text[:500]}..."
+
+        _save_summary_to_desktop(summary_text, url)
+        return summary_text
     except Exception as e:
         logger.error("AI Summarization failed: %s", e)
         return f"Summary generation failed: {e}"
