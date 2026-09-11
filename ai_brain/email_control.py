@@ -9,11 +9,18 @@ SMTP credentials are encrypted at rest using AURIX's CheckpointEncryptor.
 from __future__ import annotations
 
 import os
+import sys
 import smtplib
 import logging
 import urllib.parse
+from pathlib import Path
 from email.message import EmailMessage
 from typing import Optional
+
+# Ensure project root is in sys.path for direct execution
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 try:
     from security.encryption import get_default_encryptor
