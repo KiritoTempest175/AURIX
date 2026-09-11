@@ -57,12 +57,12 @@ log_file = "logs/aurix_session.log"
 
 [llm]
 
-model_name = "qwen2.5:3b-instruct"
-model_alias = "Qwen 2.5 3B Instruct (Ollama)"
-effective_params = "3B"
+model_name = "google/gemma-4-E4B-it"
+model_alias = "Gemma 4 E4B (4-bit NF4, GPU)"
+effective_params = "E4B"
 max_seq_length = 2048
-load_in_4bit = false
-quantization = "none"
-device = "cpu"
+load_in_4bit = true
+quantization = "nf4"
+device = "cuda"
 temperature = 0.7
 top_p = 0.9
