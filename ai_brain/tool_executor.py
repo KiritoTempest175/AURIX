@@ -20,7 +20,6 @@ import secrets
 import subprocess
 from pathlib import Path
 from typing import Any, Dict
-import time
 
 from ai_brain.app_control import AppLauncher, AppCloser
 from ai_brain.email_control import EmailController
@@ -142,6 +141,211 @@ class ToolExecutor:
             "shell_exec",
         }
 
+    def _validate_args(
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+    ) -> str | None:
+        """Validate tool arguments before security checks or execution.
+
+        Returns:
+            None when arguments are valid.
+            A user-facing clarification/error string when something is missing
+            or malformed.
+        """
+
+        if not isinstance(args, dict):
+            return (
+                f"I couldn't run {tool_name} because its arguments "
+                "were not provided in the expected format."
+            )
+
+        def clean_string(key: str) -> str:
+            value = args.get(key, "")
+            if value is None:
+                return ""
+            return str(value).strip()
+
+        # Required simple string arguments.
+        required: Dict[str, tuple[str, ...]] = {
+            "open_app": ("target",),
+            "close_app": ("target",),
+            "web_search": ("query",),
+            "send_whatsapp_message": ("contact", "message"),
+            "make_whatsapp_call": ("contact",),
+            "read_file": ("path",),
+            "write_file": ("path",),
+            "create_folder": ("path",),
+            "delete_item": ("path",),
+            "copy_item": ("source", "destination"),
+            "move_item": ("source", "destination"),
+            "rename_item": ("path", "new_name"),
+            "shell_exec": ("command",),
+        }
+
+        missing = [
+            key
+            for key in required.get(tool_name, ())
+            if not clean_string(key)
+        ]
+
+        if missing:
+            pretty = ", ".join(missing)
+            return (
+                f"I need the following information before I can run "
+                f"{tool_name}: {pretty}."
+            )
+
+        # Normalize string fields in-place so downstream controllers receive
+        # clean values rather than whitespace-only strings.
+        for key in (
+            "target",
+            "query",
+            "to",
+            "subject",
+            "body",
+            "contact",
+            "message",
+            "path",
+            "source",
+            "destination",
+            "new_name",
+            "command",
+            "action",
+            "service",
+            "url",
+        ):
+            if key in args and args[key] is not None and not isinstance(args[key], bool):
+                args[key] = str(args[key]).strip()
+
+        # ---------------------------------------------------------
+        # Email validation
+        # ---------------------------------------------------------
+        if tool_name == "send_email":
+            recipient = clean_string("to")
+            body = clean_string("body")
+
+            if not recipient:
+                return "I need the recipient email address before I can send the email."
+
+            if "@" not in recipient or recipient.startswith("@") or recipient.endswith("@"):
+                return (
+                    f"'{recipient}' does not look like a valid email address. "
+                    "Please provide the recipient again."
+                )
+
+            if not body:
+                return "I need the email body/message before I can send the email."
+
+            # Subject may legitimately be empty.
+            args.setdefault("subject", "")
+
+        # ---------------------------------------------------------
+        # Media validation
+        # ---------------------------------------------------------
+        if tool_name == "play_media":
+            action = clean_string("action").lower() or "play"
+
+            allowed_actions = {
+                "play",
+                "pause",
+                "next",
+                "previous",
+            }
+
+            if action not in allowed_actions:
+                return (
+                    "Unsupported media action. Use play, pause, next, "
+                    "or previous."
+                )
+
+            args["action"] = action
+
+            if action == "play" and not clean_string("query"):
+                return "Tell me what you want me to play."
+
+            service = clean_string("service").lower() or "default"
+            args["service"] = service
+
+        # ---------------------------------------------------------
+        # YouTube validation
+        # ---------------------------------------------------------
+        if tool_name == "youtube":
+            action = clean_string("action").lower()
+
+            allowed_actions = {
+                "play",
+                "info",
+                "summarize",
+                "download",
+                "trending",
+            }
+
+            if not action:
+                return (
+                    "I need to know what YouTube action you want: "
+                    "play, info, summarize, download, or trending."
+                )
+
+            if action not in allowed_actions:
+                return f"Unsupported YouTube action: {action}."
+
+            args["action"] = action
+
+            if action != "trending":
+                has_query = bool(clean_string("query"))
+                has_url = bool(clean_string("url"))
+
+                if not has_query and not has_url:
+                    return (
+                        f"I need a YouTube query or URL before I can "
+                        f"{action}."
+                    )
+
+        # ---------------------------------------------------------
+        # WhatsApp call boolean normalization
+        # ---------------------------------------------------------
+        if tool_name == "make_whatsapp_call":
+            video = args.get("video", False)
+
+            if isinstance(video, str):
+                args["video"] = video.strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "video",
+                }
+            else:
+                args["video"] = bool(video)
+
+        # ---------------------------------------------------------
+        # File write normalization
+        # ---------------------------------------------------------
+        if tool_name == "write_file":
+            # Empty content is allowed because creating an empty file is valid.
+            if "content" not in args or args["content"] is None:
+                args["content"] = ""
+
+            append = args.get("append", False)
+            if isinstance(append, str):
+                args["append"] = append.strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "append",
+                }
+            else:
+                args["append"] = bool(append)
+
+        # ---------------------------------------------------------
+        # Safe defaults
+        # ---------------------------------------------------------
+        if tool_name == "list_directory":
+            if not clean_string("path"):
+                args["path"] = "desktop"
+
+        return None
+
     def execute(
         self,
         tool_name: str,
@@ -153,6 +357,20 @@ class ToolExecutor:
 
         if not self.supports(tool_name):
             return f"Unknown AURIX tool: {tool_name}"
+
+        validation_error = self._validate_args(
+            tool_name,
+            args,
+        )
+
+        if validation_error:
+            logger.warning(
+                "Rejected malformed tool call: tool=%s args=%s reason=%s",
+                tool_name,
+                args,
+                validation_error,
+            )
+            return validation_error
 
         category = self._get_category(tool_name)
 
@@ -182,7 +400,6 @@ class ToolExecutor:
                     "category": category,
                     "target": target,
                     "command_text": command_text,
-                    "created_at": time.time(),
                 }
 
                 description = self._describe_action(
@@ -244,14 +461,6 @@ class ToolExecutor:
 
         if not pending:
             return "Security request expired or no longer exists."
-
-        # Pending approvals expire after 60 seconds.
-        created_at = pending.get("created_at",0)
-        if time.time() - created_at > 60:
-            return (
-                "Security request expired. "
-                "Please issue the command again."
-            )
 
         token = self.permission_manager.grant_trust_token(
             category=pending["category"],
@@ -573,7 +782,6 @@ class ToolExecutor:
                     errors="replace",
                     timeout=30,
                 )
-
             except subprocess.TimeoutExpired:
                 return (
                     "Command was stopped because it exceeded "

@@ -34,12 +34,15 @@ class AgentRouter:
             }
         }
 
-    The router:
-        1. Understands user intent with the LLM.
-        2. Selects an AURIX tool when required.
-        3. Sends physical actions through ToolExecutor.
-        4. Stores successful tool interactions in clean conversation memory.
-        5. Falls back to normal LLM conversation when no tool is required.
+    Responsibilities:
+        1. Understand natural-language requests using the LLM.
+        2. Detect incomplete/ambiguous action commands.
+        3. Ask clarification instead of inventing missing targets.
+        4. Keep short pending-action context for follow-up answers.
+        5. Select AURIX tools when physical actions are needed.
+        6. Send all physical actions through ToolExecutor.
+        7. Store successful tool interactions in clean conversation memory.
+        8. Fall back to normal LLM conversation when no tool is required.
     """
 
     def __init__(
@@ -53,9 +56,24 @@ class AgentRouter:
         )
 
         # Keep model loading lazy.
-        # This prevents the LLM from loading during basic imports/tests
-        # unless it is actually required.
+        # The model is only loaded when it is actually needed.
         self._runner = model_runner
+
+        # --------------------------------------------------------
+        # Pending clarification state
+        #
+        # Example:
+        #
+        # User: open
+        # AURIX: What would you like me to open?
+        #
+        # User: Chrome
+        #
+        # Internally becomes:
+        # "open Chrome"
+        # --------------------------------------------------------
+
+        self._pending_action: Optional[str] = None
 
     # ============================================================
     # MODEL
@@ -89,6 +107,53 @@ class AgentRouter:
         clean_text = text.strip()
 
         # --------------------------------------------------------
+        # STEP 0:
+        # Handle pending clarification.
+        # --------------------------------------------------------
+
+        clean_text, pending_response = (
+            self._handle_pending_action(
+                clean_text
+            )
+        )
+
+        if pending_response is not None:
+            return pending_response, True
+
+        # --------------------------------------------------------
+        # STEP 0.5:
+        # Prevent the model from inventing targets for incomplete
+        # commands such as:
+        #
+        # "open"
+        # "delete"
+        # "close"
+        #
+        # Instead AURIX asks the user for the missing information.
+        # --------------------------------------------------------
+
+        clarification = (
+            self._check_ambiguous_command(
+                clean_text
+            )
+        )
+
+        if clarification is not None:
+
+            pending_action, prompt = clarification
+
+            self._pending_action = (
+                pending_action
+            )
+
+            logger.info(
+                "Incomplete action detected: %s",
+                clean_text,
+            )
+
+            return prompt, True
+
+        # --------------------------------------------------------
         # STEP 1:
         # Ask the LLM what the user actually wants.
         # --------------------------------------------------------
@@ -106,15 +171,22 @@ class AgentRouter:
                 exc,
             )
 
-            # If routing itself fails, do not lose the user's request.
-            # Fall back to normal conversation.
+            # Routing failure should never lose the user's request.
             return (
-                self._general_answer(clean_text),
+                self._general_answer(
+                    clean_text
+                ),
                 True,
             )
 
-        # Defensive validation.
-        if not isinstance(decision, dict):
+        # --------------------------------------------------------
+        # Defensive validation
+        # --------------------------------------------------------
+
+        if not isinstance(
+            decision,
+            dict,
+        ):
 
             logger.warning(
                 "Tool selector returned invalid type: %s",
@@ -122,12 +194,17 @@ class AgentRouter:
             )
 
             return (
-                self._general_answer(clean_text),
+                self._general_answer(
+                    clean_text
+                ),
                 True,
             )
 
         tool_name = str(
-            decision.get("tool", "")
+            decision.get(
+                "tool",
+                "",
+            )
         ).strip()
 
         args = decision.get(
@@ -135,7 +212,10 @@ class AgentRouter:
             {},
         )
 
-        if not isinstance(args, dict):
+        if not isinstance(
+            args,
+            dict,
+        ):
             args = {}
 
         logger.info(
@@ -155,13 +235,15 @@ class AgentRouter:
         ):
 
             return (
-                self._general_answer(clean_text),
+                self._general_answer(
+                    clean_text
+                ),
                 True,
             )
 
         # --------------------------------------------------------
         # STEP 3:
-        # Execute a physical computer action
+        # Execute a physical computer action.
         # --------------------------------------------------------
 
         if self.executor.supports(
@@ -170,48 +252,50 @@ class AgentRouter:
 
             try:
 
-                result = self.executor.execute(
-                    tool_name,
-                    args,
+                result = (
+                    self.executor.execute(
+                        tool_name,
+                        args,
+                    )
                 )
 
             except Exception as exc:
 
                 logger.exception(
-                    "Tool execution failed: tool=%s error=%s",
+                    "Tool execution failed: "
+                    "tool=%s error=%s",
                     tool_name,
                     exc,
                 )
 
                 result = (
-                    f"I understood the request, but the "
-                    f"{tool_name} action failed: {exc}"
+                    "I understood the request, "
+                    f"but the {tool_name} action "
+                    f"failed: {exc}"
                 )
 
             # ----------------------------------------------------
-            # IMPORTANT:
-            # Tool responses do not pass through runner.chat().
+            # Tool responses bypass runner.chat().
             #
-            # Therefore we manually store the clean interaction
-            # so follow-up references still make sense.
+            # Store successful/normal tool interactions manually
+            # so follow-up context remains available.
             #
-            # Example:
-            #
-            # User: Open Chrome
-            # AURIX: Chrome opened.
-            #
-            # User: Now close it
-            #
-            # The model can infer "it" = Chrome.
+            # We intentionally do NOT store the temporary
+            # TRUST_TOKEN_REQUIRED response.
             # ----------------------------------------------------
 
-            if not result.startswith("TRUST_TOKEN_REQUIRED:"):
+            if not str(result).startswith(
+                "TRUST_TOKEN_REQUIRED:"
+            ):
+
                 self._remember_tool_exchange(
                     user_message=clean_text,
-                    assistant_message=result,
+                    assistant_message=str(
+                        result
+                    ),
                 )
 
-            return result, True
+            return str(result), True
 
         # --------------------------------------------------------
         # Unknown tool safety fallback
@@ -223,9 +307,482 @@ class AgentRouter:
         )
 
         return (
-            self._general_answer(clean_text),
+            self._general_answer(
+                clean_text
+            ),
             True,
         )
+
+    # ============================================================
+    # AMBIGUITY / CLARIFICATION
+    # ============================================================
+
+    def _check_ambiguous_command(
+        self,
+        text: str,
+    ) -> Optional[Tuple[str, str]]:
+        """Detect incomplete action-only commands.
+
+        Returns:
+
+            (
+                pending_action,
+                clarification_prompt
+            )
+
+        or None when the request contains enough information.
+        """
+
+        normalized = (
+            text
+            .lower()
+            .strip()
+            .strip(" .!?")
+        )
+
+        ambiguous_commands = {
+
+            # ====================================================
+            # OPEN
+            # ====================================================
+
+            "open": (
+                "open",
+                "What would you like me to open?",
+            ),
+
+            "open app": (
+                "open",
+                "Which application would you like me to open?",
+            ),
+
+            "open application": (
+                "open",
+                "Which application would you like me to open?",
+            ),
+
+            "launch": (
+                "open",
+                "What would you like me to launch?",
+            ),
+
+            "launch app": (
+                "open",
+                "Which application would you like me to launch?",
+            ),
+
+            "start": (
+                "open",
+                "What would you like me to start?",
+            ),
+
+            # Roman Urdu
+
+            "khol": (
+                "open",
+                "Kya open karna hai?",
+            ),
+
+            "khol do": (
+                "open",
+                "Kya open karna hai?",
+            ),
+
+            "open karo": (
+                "open",
+                "Kya open karna hai?",
+            ),
+
+            # ====================================================
+            # CLOSE
+            # ====================================================
+
+            "close": (
+                "close",
+                "What would you like me to close?",
+            ),
+
+            "close app": (
+                "close",
+                "Which application would you like me to close?",
+            ),
+
+            "close application": (
+                "close",
+                "Which application would you like me to close?",
+            ),
+
+            "exit": (
+                "close",
+                "Which application would you like me to close?",
+            ),
+
+            # Roman Urdu
+
+            "band karo": (
+                "close",
+                "Konsi application band karni hai?",
+            ),
+
+            "close karo": (
+                "close",
+                "Konsi application close karni hai?",
+            ),
+
+            # ====================================================
+            # DELETE
+            # ====================================================
+
+            "delete": (
+                "delete",
+                "What would you like me to delete?",
+            ),
+
+            "delete file": (
+                "delete",
+                "Which file would you like me to delete?",
+            ),
+
+            "remove": (
+                "delete",
+                "What would you like me to remove?",
+            ),
+
+            "remove file": (
+                "delete",
+                "Which file would you like me to remove?",
+            ),
+
+            # Roman Urdu
+
+            "delete karo": (
+                "delete",
+                "Konsi file ya folder delete karna hai?",
+            ),
+
+            "remove karo": (
+                "delete",
+                "Konsi file ya folder remove karna hai?",
+            ),
+
+            # ====================================================
+            # RENAME
+            # ====================================================
+
+            "rename": (
+                "rename",
+                "What would you like me to rename?",
+            ),
+
+            "rename file": (
+                "rename",
+                "Which file would you like me to rename?",
+            ),
+
+            "rename karo": (
+                "rename",
+                "Konsi file ya folder rename karna hai?",
+            ),
+
+            # ====================================================
+            # MOVE
+            # ====================================================
+
+            "move": (
+                "move",
+                "What would you like me to move?",
+            ),
+
+            "move file": (
+                "move",
+                "Which file would you like me to move?",
+            ),
+
+            "move karo": (
+                "move",
+                "Konsi file ya folder move karna hai?",
+            ),
+
+            # ====================================================
+            # COPY
+            # ====================================================
+
+            "copy": (
+                "copy",
+                "What would you like me to copy?",
+            ),
+
+            "copy file": (
+                "copy",
+                "Which file would you like me to copy?",
+            ),
+
+            "copy karo": (
+                "copy",
+                "Konsi file ya folder copy karna hai?",
+            ),
+
+            # ====================================================
+            # READ
+            # ====================================================
+
+            "read": (
+                "read",
+                "What would you like me to read?",
+            ),
+
+            "read file": (
+                "read",
+                "Which file would you like me to read?",
+            ),
+
+            "parho": (
+                "read",
+                "Konsi file read karni hai?",
+            ),
+
+            # ====================================================
+            # WRITE
+            # ====================================================
+
+            "write": (
+                "write",
+                "What would you like me to write?",
+            ),
+
+            "write file": (
+                "write",
+                "Which file would you like me to write to?",
+            ),
+
+            # ====================================================
+            # CREATE
+            # ====================================================
+
+            "create": (
+                "create",
+                "What would you like me to create?",
+            ),
+
+            "create file": (
+                "create file",
+                "What file would you like me to create?",
+            ),
+
+            "create folder": (
+                "create folder",
+                "What folder would you like me to create?",
+            ),
+
+            # ====================================================
+            # PLAY
+            # ====================================================
+
+            "play": (
+                "play",
+                "What would you like me to play?",
+            ),
+
+            "play music": (
+                "play",
+                "What music would you like me to play?",
+            ),
+
+            "play song": (
+                "play",
+                "Which song would you like me to play?",
+            ),
+
+            # ====================================================
+            # SEARCH
+            # ====================================================
+
+            "search": (
+                "search",
+                "What would you like me to search for?",
+            ),
+
+            "search web": (
+                "search",
+                "What would you like me to search for?",
+            ),
+
+            "google": (
+                "search",
+                "What would you like me to search for?",
+            ),
+
+            # ====================================================
+            # CALL
+            # ====================================================
+
+            "call": (
+                "make whatsapp call to",
+                "Who would you like me to call?",
+            ),
+
+            "make call": (
+                "make whatsapp call to",
+                "Who would you like me to call?",
+            ),
+
+            "whatsapp call": (
+                "make whatsapp call to",
+                "Who would you like me to call on WhatsApp?",
+            ),
+
+            "call karo": (
+                "make whatsapp call to",
+                "Kisko call karni hai?",
+            ),
+
+            # ====================================================
+            # SEND
+            # ====================================================
+
+            "send": (
+                "send",
+                "What would you like me to send, and to whom?",
+            ),
+
+            "send message": (
+                "send message to",
+                "Who would you like me to message?",
+            ),
+
+            "send email": (
+                "send email to",
+                "Who would you like me to email?",
+            ),
+
+            "message": (
+                "send message to",
+                "Who would you like me to message?",
+            ),
+        }
+
+        return ambiguous_commands.get(
+            normalized
+        )
+
+    # ============================================================
+    # PENDING FOLLOW-UP
+    # ============================================================
+
+    def _handle_pending_action(
+        self,
+        text: str,
+    ) -> Tuple[
+        str,
+        Optional[str],
+    ]:
+        """Resolve a user's follow-up to a clarification question.
+
+        Example:
+
+            User:
+                open
+
+            AURIX:
+                What would you like me to open?
+
+            User:
+                Chrome
+
+        becomes internally:
+
+            open Chrome
+        """
+
+        if not self._pending_action:
+
+            return text, None
+
+        normalized = (
+            text
+            .lower()
+            .strip()
+            .strip(" .!?")
+        )
+
+        cancel_words = {
+            "cancel",
+            "cancel it",
+            "never mind",
+            "nevermind",
+            "stop",
+            "no",
+            "nope",
+            "leave it",
+            "forget it",
+
+            # Roman Urdu
+            "rehne do",
+            "rehne doo",
+            "rehna do",
+            "rehna doo",
+            "rehndo",
+            "rehny do",
+            "choro",
+            "chor do",
+            "chordo",
+            "cancel karo",
+            "nahi",
+            "nai",
+        }
+
+        cancel_phrases = {
+            "cancel",
+            "never mind",
+            "nevermind",
+            "leave it",
+            "forget it",
+            "nothing",
+            "stop",
+
+            # Roman Urdu
+            "rehne do",
+            "rehndo",
+            "rehny do",
+            "choro",
+            "chor do",
+            "chordo",
+            "cancel karo",
+        }
+
+        if (
+            normalized in cancel_words
+            or any(
+                phrase in normalized
+                for phrase in cancel_phrases
+            )
+        ):
+
+            self._pending_action = None
+
+            return (
+                text,
+                "Okay, cancelled.",
+            )
+
+        pending_action = (
+            self._pending_action
+        )
+
+        # Clear before routing so stale actions cannot accidentally
+        # affect future commands.
+        self._pending_action = None
+
+        combined_request = (
+            f"{pending_action} {text}"
+        ).strip()
+
+        logger.info(
+            "Resolved clarification: '%s'",
+            combined_request,
+        )
+
+        return combined_request, None
 
     # ============================================================
     # CONVERSATION
@@ -269,8 +826,8 @@ class AgentRouter:
 
         runner.chat() automatically stores normal conversation.
 
-        Tool actions bypass runner.chat(), so without this method they
-        would disappear from short-term context.
+        Tool actions bypass runner.chat(), so without this method
+        they would disappear from short-term context.
         """
 
         try:
