@@ -21,6 +21,11 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 
 try:
+    import winreg
+except ImportError:
+    winreg = None
+
+try:
     import pyautogui
     pyautogui.PAUSE = 0.12
     pyautogui.FAILSAFE = True
@@ -36,6 +41,54 @@ except ImportError:
 
 logger = logging.getLogger("aurix.ai_brain.file_control")
 IS_WINDOWS = platform.system() == "Windows"
+
+
+def _get_windows_known_folder(folder_name: str, fallback: Path) -> Path:
+    """Resolve the real Windows known-folder location.
+
+    Supports redirected folders such as OneDrive Desktop/Documents.
+    Falls back safely to the conventional user-profile path when lookup fails.
+    """
+    fallback = fallback.expanduser()
+
+    if not IS_WINDOWS or winreg is None:
+        return fallback.resolve()
+
+    registry_names = {
+        "desktop": "Desktop",
+        "documents": "Personal",
+        "pictures": "My Pictures",
+        "music": "My Music",
+        "videos": "My Video",
+        "downloads": "{374DE290-123F-4565-9164-39C4925E467B}",
+    }
+
+    value_name = registry_names.get(folder_name.lower())
+    if not value_name:
+        return fallback.resolve()
+
+    try:
+        key_path = (
+            r"Software\Microsoft\Windows\CurrentVersion"
+            r"\Explorer\User Shell Folders"
+        )
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            key_path,
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, value_name)
+
+        value = os.path.expandvars(str(value))
+        return Path(value).expanduser().resolve()
+
+    except Exception as exc:
+        logger.debug(
+            "Could not resolve Windows known folder %s: %s",
+            folder_name,
+            exc,
+        )
+        return fallback.resolve()
 
 
 class SecurityException(PermissionError):
@@ -55,76 +108,288 @@ class FileSandbox:
     """
 
     HOME = Path.home().resolve()
+
+    # Resolve actual Windows user folders, including OneDrive/redirection.
+    DESKTOP = _get_windows_known_folder(
+        "desktop",
+        HOME / "Desktop",
+    )
+    DOWNLOADS = _get_windows_known_folder(
+        "downloads",
+        HOME / "Downloads",
+    )
+    DOCUMENTS = _get_windows_known_folder(
+        "documents",
+        HOME / "Documents",
+    )
+    PICTURES = _get_windows_known_folder(
+        "pictures",
+        HOME / "Pictures",
+    )
+    MUSIC = _get_windows_known_folder(
+        "music",
+        HOME / "Music",
+    )
+    VIDEOS = _get_windows_known_folder(
+        "videos",
+        HOME / "Videos",
+    )
+
     ALLOWED_C_DIRS = frozenset({
-        (HOME / "Desktop").resolve(),
-        (HOME / "Downloads").resolve(),
-        (HOME / "Documents").resolve(),
-        (HOME / "Pictures").resolve(),
-        (HOME / "Music").resolve(),
-        (HOME / "Videos").resolve(),
+        DESKTOP,
+        DOWNLOADS,
+        DOCUMENTS,
+        PICTURES,
+        MUSIC,
+        VIDEOS,
     })
 
     SHORTCUTS = {
-        "desktop": HOME / "Desktop",
-        "downloads": HOME / "Downloads",
-        "documents": HOME / "Documents",
-        "pictures": HOME / "Pictures",
-        "music": HOME / "Music",
-        "videos": HOME / "Videos",
+        "desktop": DESKTOP,
+        "downloads": DOWNLOADS,
+        "documents": DOCUMENTS,
+        "pictures": PICTURES,
+        "music": MUSIC,
+        "videos": VIDEOS,
         "home": HOME,
     }
 
     @classmethod
-    def resolve_path(cls, raw: str) -> Path:
-        """Resolves shortcuts, dynamically searches authorized C: roots, and normalizes the path."""
+    def resolve_path(
+        cls,
+        raw: str,
+        *,
+        destructive: bool = False,
+    ) -> Path:
+        """Resolve a user path safely.
+
+        Rules:
+        - Absolute paths are validated directly.
+        - Known folder shortcuts are supported.
+        - Relative file names are searched in approved user folders.
+        - Destructive operations require an exact, unambiguous match.
+        - Never silently guess between multiple destructive targets.
+        """
+
         if not raw or not str(raw).strip():
-            return cls.HOME / "Desktop"
+            raise SecurityException(
+                "No file or folder path was provided."
+            )
 
         cleaned = str(raw).strip().strip('"').strip("'")
         lower = cleaned.lower()
 
-        # 1. Check direct shortcuts
+        # ---------------------------------------------------------
+        # 1. Named shortcuts
+        # ---------------------------------------------------------
+
         if lower in cls.SHORTCUTS:
+
             resolved = cls.SHORTCUTS[lower].resolve()
+
             cls.validate_path(resolved)
+
             return resolved
 
-        # 2. Check if it's already an absolute path (e.g. E:\ or C:\...)
-        possible_path = Path(cleaned).expanduser()
-        if possible_path.is_absolute():
-            resolved = possible_path.resolve()
+        # ---------------------------------------------------------
+        # 2. Absolute path
+        # ---------------------------------------------------------
+
+        possible = Path(cleaned).expanduser()
+
+        if possible.is_absolute():
+
+            resolved = possible.resolve()
+
             cls.validate_path(resolved)
+
             return resolved
 
-        # 3. Dynamic Search: Recursively look for a matching folder/file name inside all allowed C: roots
-        skip_dirs = {".git", "node_modules", "venv", "env", "__pycache__", ".vscode", "appdata"}
+        # ---------------------------------------------------------
+        # 3. Explicit relative folder:
+        #    Desktop/test.txt
+        #    Documents/file.docx
+        # ---------------------------------------------------------
+
+        parts = Path(cleaned).parts
+
+        if parts:
+
+            first = parts[0].lower()
+
+            shortcut_root = cls.SHORTCUTS.get(first)
+
+            if shortcut_root is not None:
+
+                target = shortcut_root.joinpath(
+                    *parts[1:]
+                ).resolve()
+
+                cls.validate_path(target)
+
+                return target
+
+        # ---------------------------------------------------------
+        # 4. Search allowed roots
+        # ---------------------------------------------------------
+
+        exact_matches = []
+        fuzzy_matches = []
+
+        skip_dirs = {
+            ".git",
+            "node_modules",
+            "venv",
+            ".venv",
+            "env",
+            "__pycache__",
+            ".vscode",
+            "appdata",
+        }
+
         for base_dir in cls.ALLOWED_C_DIRS:
+
             if not base_dir.exists():
                 continue
+
             try:
-                for root, dirs, files in os.walk(base_dir):
-                    dirs[:] = [d for d in dirs if d.lower() not in skip_dirs]
-                    
-                    # Check if current directory name matches
-                    current_dir_name = Path(root).name.lower()
-                    if current_dir_name == lower or lower in current_dir_name:
-                        matched_path = Path(root).resolve()
-                        cls.validate_path(matched_path)
-                        return matched_path
 
-                    # Check files
+                for root, dirs, files in os.walk(
+                    base_dir
+                ):
+
+                    dirs[:] = [
+                        d
+                        for d in dirs
+                        if d.lower() not in skip_dirs
+                    ]
+
+                    root_path = Path(root)
+
+                    # Directory match
+                    if root_path.name.lower() == lower:
+
+                        candidate = root_path.resolve()
+
+                        cls.validate_path(candidate)
+
+                        exact_matches.append(
+                            candidate
+                        )
+
+                    # File matches
                     for file_name in files:
-                        if lower == file_name.lower() or lower in file_name.lower():
-                            matched_path = (Path(root) / file_name).resolve()
-                            cls.validate_path(matched_path)
-                            return matched_path
-            except Exception:
-                continue
 
-        # 4. Fallback: treat relative to home
-        resolved = (cls.HOME / cleaned).resolve()
-        cls.validate_path(resolved)
-        return resolved
+                        name_lower = file_name.lower()
+
+                        candidate = (
+                            root_path / file_name
+                        ).resolve()
+
+                        if name_lower == lower:
+
+                            cls.validate_path(
+                                candidate
+                            )
+
+                            exact_matches.append(
+                                candidate
+                            )
+
+                        elif (
+                            not destructive
+                            and lower in name_lower
+                        ):
+
+                            cls.validate_path(
+                                candidate
+                            )
+
+                            fuzzy_matches.append(
+                                candidate
+                            )
+
+            except Exception as exc:
+
+                logger.debug(
+                    "Search skipped for %s: %s",
+                    base_dir,
+                    exc,
+                )
+
+        # ---------------------------------------------------------
+        # Exact single match
+        # ---------------------------------------------------------
+
+        unique_exact = list(
+            dict.fromkeys(exact_matches)
+        )
+
+        if len(unique_exact) == 1:
+            return unique_exact[0]
+
+        # Multiple matches = NEVER GUESS.
+        if len(unique_exact) > 1:
+
+            matches = "\n".join(
+                f"- {path}"
+                for path in unique_exact[:10]
+            )
+
+            raise SecurityException(
+                "Multiple matching items were found. "
+                "Please specify the location:\n"
+                f"{matches}"
+            )
+
+        # ---------------------------------------------------------
+        # Destructive actions cannot use fuzzy guesses.
+        # ---------------------------------------------------------
+
+        if destructive:
+
+            raise FileNotFoundError(
+                f"Could not safely locate '{cleaned}'. "
+                "Specify its folder, for example "
+                "'Desktop/test.txt'."
+            )
+
+        # ---------------------------------------------------------
+        # Non-destructive fuzzy fallback
+        # ---------------------------------------------------------
+
+        unique_fuzzy = list(
+            dict.fromkeys(fuzzy_matches)
+        )
+
+        if len(unique_fuzzy) == 1:
+            return unique_fuzzy[0]
+
+        if len(unique_fuzzy) > 1:
+
+            matches = "\n".join(
+                f"- {path}"
+                for path in unique_fuzzy[:10]
+            )
+
+            raise SecurityException(
+                "Several similar items were found. "
+                "Please specify which one you mean:\n"
+                f"{matches}"
+            )
+
+        # ---------------------------------------------------------
+        # New file/path default
+        # ---------------------------------------------------------
+
+        target = (
+            cls.DESKTOP
+            / cleaned
+        ).resolve()
+
+        cls.validate_path(target)
+
+        return target
 
     @classmethod
     def validate_path(cls, target: Path) -> None:
@@ -285,7 +550,10 @@ class FileController:
         Always requires user authorization and can be driven visually via PyAutoGUI.
         """
         try:
-            target = FileSandbox.resolve_path(target_path)
+            target = FileSandbox.resolve_path(
+                target_path,
+                destructive=True,
+            )
             if not target.exists():
                 return f"File not found: {target}"
 
@@ -318,7 +586,10 @@ class FileController:
     def move_item(self, source_path: str, destination_path: str, visual: bool = True) -> str:
         """Moves a file or folder from source to destination with visual automation."""
         try:
-            src = FileSandbox.resolve_path(source_path)
+            src = FileSandbox.resolve_path(
+                source_path,
+                destructive=True,
+            )
             dst = FileSandbox.resolve_path(destination_path)
 
             if not src.exists():
@@ -387,7 +658,10 @@ class FileController:
     def rename_item(self, target_path: str, new_name: str, visual: bool = True) -> str:
         """Renames a file or directory with visual automation."""
         try:
-            target = FileSandbox.resolve_path(target_path)
+            target = FileSandbox.resolve_path(
+                target_path,
+                destructive=True,
+            )
             if not target.exists():
                 return f"Target not found: {target}"
 

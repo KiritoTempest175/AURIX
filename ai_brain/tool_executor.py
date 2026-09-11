@@ -20,6 +20,7 @@ import secrets
 import subprocess
 from pathlib import Path
 from typing import Any, Dict
+import time
 
 from ai_brain.app_control import AppLauncher, AppCloser
 from ai_brain.email_control import EmailController
@@ -181,6 +182,7 @@ class ToolExecutor:
                     "category": category,
                     "target": target,
                     "command_text": command_text,
+                    "created_at": time.time(),
                 }
 
                 description = self._describe_action(
@@ -242,6 +244,14 @@ class ToolExecutor:
 
         if not pending:
             return "Security request expired or no longer exists."
+
+        # Pending approvals expire after 60 seconds.
+        created_at = pending.get("created_at",0)
+        if time.time() - created_at > 60:
+            return (
+                "Security request expired. "
+                "Please issue the command again."
+            )
 
         token = self.permission_manager.grant_trust_token(
             category=pending["category"],
