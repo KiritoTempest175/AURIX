@@ -48,12 +48,30 @@ except ImportError:
     UNSLOTH_AVAILABLE = False
 
 
-def _read_config_model() -> tuple[str, str]:
-    """Read configured model_name and device from config.toml.
+def load_md(file_path: Union[str, Path]) -> str:
+    """Load a markdown file from the project vault or relative project path."""
+    p = Path(file_path)
+    if not p.is_absolute():
+        p = Path(_PROJECT_ROOT) / p
+    if p.exists():
+        try:
+            return p.read_text(encoding="utf-8")
+        except Exception as e:
+            logger.warning("Failed reading markdown file %s: %s", p, e)
+            return ""
+    logger.warning("Markdown file not found: %s", p)
+    return ""
+
+
+def _read_config_model() -> tuple[str, str, bool, str, str]:
+    """Read configured model_name, device, and quantization settings from config.toml.
 
     If model_name is set to "auto" (or absent), delegates to
     model_resolver.resolve_best_model() which detects installed models
     and auto-downloads Gemma 4 E4B if nothing is available.
+
+    Returns:
+        Tuple of (model_name, device, load_in_4bit, quantization, effective_params).
     """
     import sys
     if sys.version_info >= (3, 11):
@@ -66,6 +84,9 @@ def _read_config_model() -> tuple[str, str]:
 
     config_model_name = None
     config_device = "cuda"
+    config_load_in_4bit = True
+    config_quantization = "nf4"
+    config_effective_params = "E4B"
 
     if tomllib:
         try:
@@ -77,6 +98,9 @@ def _read_config_model() -> tuple[str, str]:
                 llm = cfg.get("llm", {})
                 config_model_name = llm.get("model_name")
                 config_device = llm.get("device", "cuda")
+                config_load_in_4bit = llm.get("load_in_4bit", True)
+                config_quantization = llm.get("quantization", "nf4")
+                config_effective_params = llm.get("effective_params", "E4B")
         except Exception:
             pass
 
@@ -91,13 +115,19 @@ def _read_config_model() -> tuple[str, str]:
             "Model resolver selected: '%s' (%s, priority=%d)",
             _spec.alias, _model_id, _spec.priority,
         )
-        return _model_id, config_device
+        return _model_id, config_device, config_load_in_4bit, config_quantization, config_effective_params
     except Exception as resolver_err:
         logger.warning("Model resolver failed (%s). Using direct config value.", resolver_err)
 
     # Fallback: return whatever config says, or the primary model as default
     from ai_engine.inference.model_resolver import PRIMARY_MODEL_ID
-    return config_model_name or PRIMARY_MODEL_ID, config_device
+    return (
+        config_model_name or PRIMARY_MODEL_ID,
+        config_device,
+        config_load_in_4bit,
+        config_quantization,
+        config_effective_params,
+    )
 
 
 def resolve_model_path(model_name_or_id: str) -> Optional[str]:
@@ -149,15 +179,18 @@ def resolve_model_path(model_name_or_id: str) -> Optional[str]:
 class GemmaModelRunner:
     """Orchestrates LLM reasoning model loading, GPU 4-bit scaling, and inference."""
 
-    DEFAULT_MODEL = "qwen2.5:3b-instruct"
+    # Primary model: Gemma 4 E4B, loaded locally in 4-bit NF4 on GPU.
+    # This is the fallback used only if config.toml and the model resolver
+    # both fail to supply a model_name.
+    DEFAULT_MODEL = "google/gemma-4-E4B-it"
 
     def __init__(
         self,
         model_name: Optional[str] = None,
-        effective_params: str = "E4B",
+        effective_params: Optional[str] = None,
         max_seq_length: int = 2048,
-        load_in_4bit: bool = True,
-        quantization: str = "nf4",
+        load_in_4bit: Optional[bool] = None,
+        quantization: Optional[str] = None,
         device: Optional[str] = None,
         fallback_mode: bool = True,
         force_fallback: bool = False,
@@ -167,22 +200,38 @@ class GemmaModelRunner:
         Args:
             model_name: HuggingFace model path or local directory.
             effective_params: Elastic parameter mode: "E4B" (full 4B) or "E2B" (efficient 2B).
+                If None, falls back to config.toml's [llm].effective_params, then "E4B".
             max_seq_length: Maximum context sequence length.
             load_in_4bit: Whether to load with 4-bit quantization.
+                If None, falls back to config.toml's [llm].load_in_4bit, then True.
             quantization: Quantization format ("nf4", "fp4").
+                If None, falls back to config.toml's [llm].quantization, then "nf4".
             device: Target device ("cuda", "cpu").
             fallback_mode: If True, operates in simulation mode if GPU/weights unavailable.
             force_fallback: If True, skips loading weights and forces deterministic reasoning mode.
         """
-        cfg_model, cfg_device = _read_config_model()
+        cfg_model, cfg_device, cfg_load_in_4bit, cfg_quantization, cfg_effective_params = _read_config_model()
         self.model_name = model_name or cfg_model or self.DEFAULT_MODEL
-        self.effective_params = effective_params.upper()
+        self.effective_params = (effective_params or cfg_effective_params or "E4B").upper()
         self.max_seq_length = max_seq_length
-        self.load_in_4bit = load_in_4bit
-        self.quantization = quantization
+        self.load_in_4bit = load_in_4bit if load_in_4bit is not None else cfg_load_in_4bit
+        self.quantization = quantization or cfg_quantization
 
         target_dev = device or cfg_device or "cuda"
-        self.device = target_dev if (torch and torch.cuda.is_available() and target_dev == "cuda") else "cpu"
+        if target_dev == "cuda":
+            if not (torch and torch.cuda.is_available()):
+                logger.error(
+                    "config.toml requests device='cuda' but CUDA is unavailable "
+                    "(torch present=%s, cuda available=%s). Falling back to CPU — "
+                    "check GPU drivers / CUDA toolkit / torch install if this is unexpected.",
+                    bool(torch), bool(torch and torch.cuda.is_available()),
+                )
+                self.device = "cpu"
+            else:
+                self.device = "cuda"
+        else:
+            self.device = "cpu"
+
         self.fallback_mode = fallback_mode
         self.force_fallback = force_fallback
 
@@ -232,7 +281,7 @@ class GemmaModelRunner:
                 if spec.model_id not in candidates_to_try:
                     candidates_to_try.append(spec.model_id)
         except ImportError:
-            for fallback_id in ("qwen2.5:3b-instruct", "google/gemma-4-E4B-it", "Qwen/Qwen2.5-Coder-3B-Instruct"):
+            for fallback_id in ("google/gemma-4-E4B-it", "qwen2.5:3b-instruct", "Qwen/Qwen2.5-Coder-3B-Instruct"):
                 if fallback_id not in candidates_to_try:
                     candidates_to_try.append(fallback_id)
 
@@ -363,17 +412,23 @@ class GemmaModelRunner:
         terminal_context: Optional[str] = None,
     ) -> str:
         """Format grounded multi-modal context into official Gemma chat template."""
-        sys_prompt = system_instruction or (
-            "You are AURIX, a local Windows desktop AI assistant running directly "
-            "on the user's own computer. You are NOT Alibaba Cloud, ChatGPT, Qwen, "
-            "a cloud assistant, or a remote service. "
-            "You can interact with the user's computer through AURIX tools. "
-            "When a tool action has already been handled by the AURIX tool system, "
-            "respond naturally about the result. "
-            "For normal conversation, answer naturally and helpfully. "
-            "Do not claim that you cannot access local applications merely because "
-            "you are an AI. Local computer permissions and security are handled by "
-            "AURIX's ToolExecutor and PermissionManager."
+        sys_prompt = load_md("aurix_vault/model/aurix.md")
+        sys_rules = load_md("aurix_vault/model/rules.md")
+
+        system_parts = []
+        if sys_prompt and sys_prompt.strip():
+            system_parts.append(sys_prompt.strip())
+        if sys_rules and sys_rules.strip():
+            system_parts.append(sys_rules.strip())
+        if system_instruction and system_instruction.strip():
+            system_parts.append(system_instruction.strip())
+
+        combined_sys_prompt = (
+            "\n\n---\n\n".join(system_parts)
+            if system_parts
+            else (
+                "You are Luna, an AI assistant running inside the AURIX ecosystem."
+            )
         )
 
         # Ground context
@@ -388,7 +443,7 @@ class GemmaModelRunner:
             grounded_user_content = f"{chr(10).join(extra_context)}\n\n[User Instruction]: {user_message}"
 
         effective_history = context_history if context_history is not None else list(self._history)
-        messages = [{"role": "system", "content": sys_prompt}]
+        messages = [{"role": "system", "content": combined_sys_prompt}]
         for msg in effective_history:
             messages.append(msg)
         messages.append({"role": "user", "content": grounded_user_content})
@@ -401,14 +456,14 @@ class GemmaModelRunner:
 
         # Template format: ChatML for Ollama/Qwen, or Gemma turn tags
         if getattr(self, "backend", None) == "ollama" and not self.tokenizer:
-            formatted = f"<|im_start|>system\n{sys_prompt}<|im_end|>\n"
+            formatted = f"<|im_start|>system\n{combined_sys_prompt}<|im_end|>\n"
             for msg in effective_history:
                 formatted += f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>\n"
             formatted += f"<|im_start|>user\n{grounded_user_content}<|im_end|>\n<|im_start|>assistant\n"
             return formatted
 
         # Standard fallback template format for Gemma
-        formatted = f"<start_of_turn>system\n{sys_prompt}<end_of_turn>\n"
+        formatted = f"<start_of_turn>system\n{combined_sys_prompt}<end_of_turn>\n"
         for msg in effective_history:
             formatted += f"<start_of_turn>{msg['role']}\n{msg['content']}<end_of_turn>\n"
         formatted += f"<start_of_turn>user\n{grounded_user_content}<end_of_turn>\n<start_of_turn>model\n"
@@ -459,7 +514,8 @@ class GemmaModelRunner:
                 logger.error(f"Inference error: {e}. Yielding fallback response.")
                 reply = self._fallback_generate(prompt)
         return reply
-    def chat(self,user_message: str,system_instruction: Optional[str] = None,max_new_tokens: int = 256,temperature: float = 0.7,top_p: float = 0.9,) -> str:
+
+    def chat(self, user_message: str, system_instruction: Optional[str] = None, max_new_tokens: int = 256, temperature: float = 0.7, top_p: float = 0.9,) -> str:
         """Natural conversation API with clean rolling history.
         Only the raw user message and final assistant reply are stored.
         Formatted prompts, tool-routing prompts, and system instructions are
@@ -495,8 +551,8 @@ class GemmaModelRunner:
             self._history = self._history[-20:]
 
         return reply
-    
-    def remember_exchange(self,user_message: str,assistant_message: str,) -> None:
+
+    def remember_exchange(self, user_message: str, assistant_message: str,) -> None:
         """Record an externally produced tool/action exchange in chat memory."""
 
         if user_message and user_message.strip():
@@ -686,7 +742,6 @@ class GemmaModelRunner:
             "args": {},
         }
 
-
     def _init_ollama(self, model_name: str) -> bool:
         """Verify Ollama server is running and model is available, launching service if needed."""
         import urllib.request
@@ -774,8 +829,14 @@ def get_default_gemma_runner() -> GemmaModelRunner:
     """Return default singleton GemmaModelRunner configured with local GPU model."""
     global _GLOBAL_RUNNER
     if _GLOBAL_RUNNER is None:
-        cfg_model, cfg_device = _read_config_model()
-        _GLOBAL_RUNNER = GemmaModelRunner(model_name=cfg_model, device=cfg_device)
+        cfg_model, cfg_device, cfg_load_in_4bit, cfg_quantization, cfg_effective_params = _read_config_model()
+        _GLOBAL_RUNNER = GemmaModelRunner(
+            model_name=cfg_model,
+            device=cfg_device,
+            load_in_4bit=cfg_load_in_4bit,
+            quantization=cfg_quantization,
+            effective_params=cfg_effective_params,
+        )
     return _GLOBAL_RUNNER
 
 
@@ -789,17 +850,15 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     print("[LUNA] Initializing Gemma 4 E4B Runner...")
     runner = get_default_gemma_runner()
-    
+
     test_queries = [
         "Check system status and hardware metrics",
         "Inspect power governor state",
         "Verify checkpoint snapshot integrity"
     ]
-    
+
     for q in test_queries:
         prompt = runner.format_chat_prompt(q)
         response = runner.generate_response(prompt)
         print(f"\n[User]: {q}")
         print(f"[LUNA]: {response}")
-
-
