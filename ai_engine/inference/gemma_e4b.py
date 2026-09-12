@@ -412,8 +412,8 @@ class GemmaModelRunner:
         terminal_context: Optional[str] = None,
     ) -> str:
         """Format grounded multi-modal context into official Gemma chat template."""
-        sys_prompt = load_md("aurix_vault/model/aurix.md")
-        sys_rules = load_md("aurix_vault/model/rules.md")
+        # Prefer unified model.md, with fallback to legacy model/aurix.md & model/rules.md
+        sys_prompt = load_md("aurix_vault/model.md")
 
         system_parts = []
         if sys_prompt and sys_prompt.strip():

@@ -1,0 +1,5 @@
+# Generated index — do not hand-edit
+.index/
+*.lock
+*.tmp
+.sb_*
