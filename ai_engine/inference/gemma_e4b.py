@@ -4,6 +4,16 @@ Implements the JARVIS-style reasoning brain using Google's Gemma 3n (E4B / E2B
 elastic configuration) loaded in 4-bit NormalFloat (NF4) quantization.
 Manages multi-modal context grounding, chat template formatting, tool selection,
 and offline fallback execution.
+
+Fix log:
+- format_chat_prompt() referenced a variable `sys_rules` that was never
+  assigned anywhere in the class or module -- this made EVERY call raise
+  NameError immediately, before any prompt was ever built (this is why
+  send_email_from_subject and the general "smart"/AI-answer path both
+  failed with "name 'sys_rules' is not defined"). The comment above the
+  original line described an intended fallback (unified model.md, falling
+  back to legacy aurix.md + rules.md) that was never actually implemented --
+  it's implemented now, see format_chat_prompt() below.
 """
 
 from __future__ import annotations
@@ -412,14 +422,28 @@ class GemmaModelRunner:
         terminal_context: Optional[str] = None,
     ) -> str:
         """Format grounded multi-modal context into official Gemma chat template."""
-        # Prefer unified model.md, with fallback to legacy model/aurix.md & model/rules.md
+        # Prefer the unified persona file (model.md). If it doesn't exist yet,
+        # fall back to combining the two legacy files it was meant to replace
+        # (aurix.md = persona/identity, rules.md = operating rules).
+        #
+        # FIX: this used to reference a variable `sys_rules` that was never
+        # assigned anywhere -- format_chat_prompt() raised NameError on every
+        # single call as soon as it tried to build the system prompt, which
+        # is why every request (including the email body-generation feature)
+        # failed with "name 'sys_rules' is not defined". The unified-vs-legacy
+        # fallback described in the original comment was never actually
+        # implemented; it is now.
         sys_prompt = load_md("aurix_vault/model.md")
+        if not sys_prompt.strip():
+            legacy_persona = load_md("aurix_vault/aurix.md")
+            legacy_rules = load_md("aurix_vault/rules.md")
+            sys_prompt = "\n\n---\n\n".join(
+                part.strip() for part in (legacy_persona, legacy_rules) if part.strip()
+            )
 
         system_parts = []
         if sys_prompt and sys_prompt.strip():
             system_parts.append(sys_prompt.strip())
-        if sys_rules and sys_rules.strip():
-            system_parts.append(sys_rules.strip())
         if system_instruction and system_instruction.strip():
             system_parts.append(system_instruction.strip())
 
