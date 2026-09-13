@@ -36,12 +36,54 @@ except ImportError:
     TrainerCallback = object
     TORCH_AVAILABLE = False
 
-try:
-    from unsloth import FastLanguageModel
-    UNSLOTH_AVAILABLE = True
-except ImportError:
-    FastLanguageModel = None
-    UNSLOTH_AVAILABLE = False
+FastLanguageModel = None
+UNSLOTH_AVAILABLE = False
+
+
+def get_unsloth_backend():
+    """
+    Lazily load Unsloth only on a CUDA-capable machine.
+
+    Importing Unsloth on CPU-only PyTorch can raise AssertionError or
+    RuntimeError during module import, which previously broke pytest
+    collection and application startup.
+    """
+    global FastLanguageModel, UNSLOTH_AVAILABLE
+
+    if FastLanguageModel is not None:
+        return FastLanguageModel
+
+    if not TORCH_AVAILABLE or torch is None:
+        return None
+
+    try:
+        if not torch.cuda.is_available():
+            return None
+    except Exception as exc:
+        logger.warning(
+            "CUDA detection failed; Unsloth disabled: %s",
+            exc,
+        )
+        return None
+
+    try:
+        from unsloth import FastLanguageModel as _FastLanguageModel
+
+        FastLanguageModel = _FastLanguageModel
+        UNSLOTH_AVAILABLE = True
+
+        return FastLanguageModel
+
+    except Exception as exc:
+        logger.warning(
+            "Optional Unsloth training backend unavailable: %s",
+            exc,
+        )
+
+        FastLanguageModel = None
+        UNSLOTH_AVAILABLE = False
+
+        return None
 
 try:
     from trl import SFTTrainer

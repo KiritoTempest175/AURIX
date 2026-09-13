@@ -33,7 +33,22 @@ use std::io;
 // The top-level directory that the agent is permitted to access.
 // Any path that resolves outside this boundary is rejected.
 // ─────────────────────────────────────────────────────────────────────────────
-const ALLOWED_ROOT: &str = r"C:\Users\NAC\Documents\University\Projects";
+fn default_allowed_root() -> Result<PathBuf, io::Error> {
+    // Production / user override.
+    if let Ok(configured) = std::env::var("AURIX_ALLOWED_ROOT") {
+        let configured = configured.trim();
+
+        if !configured.is_empty() {
+            return Ok(PathBuf::from(configured));
+        }
+    }
+
+    // Portable fallback.
+    //
+    // This makes local development and CI work without embedding a
+    // developer-specific Windows username/path into the binary.
+    std::env::current_dir()
+}
 
 // ─── Core Security Function ────────────────────────────────────────────────
 
@@ -155,13 +170,15 @@ pub fn secure_path_resolve(base_dir: &Path, target: &str) -> Result<PathBuf, io:
 /// Returns `PyRuntimeError` if the path escapes the jail or canonicalization fails.
 #[pyfunction]
 pub fn validate_path(requested_path_str: &str) -> PyResult<String> {
-    let root = Path::new(ALLOWED_ROOT);
+    let root = default_allowed_root().map_err(|err| {
+        pyo3::exceptions::PyIOError::new_err(format!(
+            "Unable to determine AURIX file-jail root: {}",
+            err
+        ))
+    })?;
 
-    // Use `std::panic::catch_unwind` to convert the panic from
-    // `secure_path_resolve` into a Python exception, since panics
-    // across the FFI boundary are undefined behaviour.
     let result = std::panic::catch_unwind(|| {
-        secure_path_resolve(root, requested_path_str)
+        secure_path_resolve(&root, requested_path_str)
     });
 
     match result {

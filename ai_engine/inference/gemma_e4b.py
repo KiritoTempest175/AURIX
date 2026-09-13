@@ -50,12 +50,58 @@ except ImportError:
     BitsAndBytesConfig = None
     TORCH_AVAILABLE = False
 
-try:
-    from unsloth import FastLanguageModel
-    UNSLOTH_AVAILABLE = True
-except ImportError:
-    FastLanguageModel = None
-    UNSLOTH_AVAILABLE = False
+FastLanguageModel = None
+UNSLOTH_AVAILABLE = False
+
+
+def _get_fast_language_model():
+    """
+    Lazily import Unsloth only when CUDA is actually available.
+
+    Unsloth may raise runtime/AssertionError exceptions during import on
+    CPU-only PyTorch builds, so it must never be imported eagerly.
+    """
+    global FastLanguageModel, UNSLOTH_AVAILABLE
+
+    if FastLanguageModel is not None:
+        return FastLanguageModel
+
+    if not TORCH_AVAILABLE or torch is None:
+        return None
+
+    try:
+        if not torch.cuda.is_available():
+            logger.debug(
+                "CUDA is unavailable; skipping optional Unsloth backend."
+            )
+            return None
+    except Exception as exc:
+        logger.warning(
+            "Could not determine CUDA availability; skipping Unsloth: %s",
+            exc,
+        )
+        return None
+
+    try:
+        from unsloth import FastLanguageModel as _FastLanguageModel
+
+        FastLanguageModel = _FastLanguageModel
+        UNSLOTH_AVAILABLE = True
+
+        return FastLanguageModel
+
+    except Exception as exc:
+        # IMPORTANT:
+        # Unsloth can raise AssertionError/RuntimeError, not only ImportError.
+        logger.warning(
+            "Optional Unsloth backend unavailable: %s",
+            exc,
+        )
+
+        FastLanguageModel = None
+        UNSLOTH_AVAILABLE = False
+
+        return None
 
 
 def load_md(file_path: Union[str, Path]) -> str:
@@ -323,18 +369,31 @@ class GemmaModelRunner:
             logger.info("Attempting to load model weights for '%s' from '%s'...", model_id, target_path)
 
             try:
-                if UNSLOTH_AVAILABLE and self.device == "cuda":
+                unsloth_backend = (
+                    _get_fast_language_model()
+                    if self.device == "cuda"
+                    else None
+                )
+
+                if unsloth_backend is not None:
                     logger.info(
-                        f"Loading model ({self.effective_params}) with Unsloth from '{target_path}' "
-                        f"in 4-bit {self.quantization.upper()}..."
+                        "Loading model (%s) with Unsloth from '%s' in 4-bit %s...",
+                        self.effective_params,
+                        target_path,
+                        self.quantization.upper(),
                     )
-                    self.model, self.tokenizer = FastLanguageModel.from_pretrained(
-                        model_name=target_path,
-                        max_seq_length=self.max_seq_length,
-                        load_in_4bit=self.load_in_4bit,
-                        fast_inference=True,
+
+                    self.model, self.tokenizer = (
+                        unsloth_backend.from_pretrained(
+                            model_name=target_path,
+                            max_seq_length=self.max_seq_length,
+                            load_in_4bit=self.load_in_4bit,
+                            fast_inference=True,
+                        )
                     )
-                    FastLanguageModel.for_inference(self.model)
+
+                    unsloth_backend.for_inference(self.model)
+
                 else:
                     # GPU Tensor Core optimizations
                     if self.device == "cuda" and hasattr(torch, "backends"):

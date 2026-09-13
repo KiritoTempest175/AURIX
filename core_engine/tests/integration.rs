@@ -227,23 +227,32 @@ fn test_file_jail_accepts_valid_path() {
     pyo3::prepare_freethreaded_python();
 
     Python::with_gil(|_py| {
-        // The ALLOWED_ROOT is set to the Projects directory, so validate_path
-        // should accept any path under it.
-        let valid_path = r"C:\Users\NAC\Documents\University\Projects";
+        let current_dir = std::env::current_dir()
+            .expect("Failed to determine current working directory");
 
-        match file_jail::validate_path(valid_path) {
+        let valid_path = current_dir
+            .to_string_lossy()
+            .to_string();
+
+        match file_jail::validate_path(&valid_path) {
             Ok(canonical) => {
                 assert!(
                     !canonical.is_empty(),
                     "Canonical path should be non-empty"
                 );
+
                 eprintln!(
                     "[Integration Test] File jail accepted path: {} -> {}",
-                    valid_path, canonical
+                    valid_path,
+                    canonical
                 );
             }
+
             Err(e) => {
-                panic!("validate_path rejected a valid path: {:?}", e);
+                panic!(
+                    "validate_path rejected current workspace: {:?}",
+                    e
+                );
             }
         }
     });
