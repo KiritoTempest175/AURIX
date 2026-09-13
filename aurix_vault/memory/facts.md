@@ -52,8 +52,6 @@ Configured in `config.toml`:
 
 ## 4. Installed AI Models & Checkpoints
 
-* **Primary Fast LLM:** Ollama `qwen2.5:3b-instruct` (Low VRAM, ultra-fast response)
-* **Foundation NF4 LLM:** `google/gemma-4-E4B-it` (4-bit NF4 quantized, GPU accelerated via Unsloth/PyTorch)
-* **Code Fallback LLM:** `Qwen/Qwen2.5-Coder-3B-Instruct`
+* **Primary Foundation LLM:** `google/gemma-4-E4B-it` (4-bit NF4 quantized, GPU accelerated via Unsloth/PyTorch)
 * **STT Model:** `models/whisper/ggml-base.en.bin` (GGML 16kHz)
 * **TTS Model:** `models/piper/en_US-lessac-medium.onnx`

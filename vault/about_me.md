@@ -16,7 +16,7 @@ salience: 7
 * **Email:** `huzaifa@aurix.local`
 
 ## Engineering Stack
-* **Python 3.10+** — AI brain, LLM inference (Gemma 4 E4B, Ollama Qwen 2.5), Whisper STT, Piper TTS.
+* **Python 3.10+** — AI brain, LLM inference (Gemma 4 E4B), Whisper STT, Piper TTS.
 * **Rust 2021** — Bare-metal core engine (`core_engine.pyd`, `luna_core.pyd`), power governors, file jail.
 * **VS Code** — Primary editor.
 * **Windows Terminal / PowerShell** — Primary shell.

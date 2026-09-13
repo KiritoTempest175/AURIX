@@ -24,11 +24,8 @@ This document maintains a chronological executive summary of major milestones, a
 * File jail sandboxing preventing accidental out-of-bounds writes.
 * Hardware telemetry via direct Windows API (`GetLastInputInfo`) and NVML GPU thermal observers.
 
-### Phase 3: Multi-Model Inference & Cognitive Architecture
-* Development of dynamic model resolver with fallback cascade:
-  1. Ollama `qwen2.5:3b-instruct` (Fast low-VRAM inference)
-  2. `google/gemma-4-E4B-it` (4-bit NF4 quantized foundation)
-  3. `Qwen/Qwen2.5-Coder-3B-Instruct` (Code fallback)
+### Phase 3: Foundation Model Inference & Cognitive Architecture
+* Development of dynamic model resolver configured for Google Gemma 4 E4B (`google/gemma-4-E4B-it` in 4-bit NF4 quantization).
 * Design of continuous local learning loop (Student-5B QLoRA with 70/30 synthetic-to-telemetry replay buffer and AES-256-GCM checkpoints).
 
 ### Phase 4: Cyberpunk HUD & Persona Grounding

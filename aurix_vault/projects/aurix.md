@@ -26,7 +26,7 @@ tags: [project, aurix, architecture, rust, python, ai]
    * Adaptive Power Governor v2 managing thermal ceilings and 4-tier activity states.
    * Safe file-jail containment and zero-cost atomic memory.
 3. **AI Engine & Inference (`ai_engine/`):**
-   * Priority multi-model auto-resolver (Ollama Qwen 2.5 3B, Gemma 4 E4B NF4, Qwen Coder).
+   * Google Gemma 4 E4B NF4 foundation model runner and model auto-resolver.
    * Student-5B Continuous QLoRA background training loop.
 4. **AI Brain & Automation (`ai_brain/`):**
    * App control, WhatsApp Desktop automation, media player, email dispatcher, file operator.

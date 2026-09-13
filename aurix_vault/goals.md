@@ -21,7 +21,7 @@ This document outlines the core objectives, active engineering milestones, and l
 
 * [x] **Rust Core FFI Stabilization:** PyO3 bindings for `core_engine.pyd` and `luna_core.pyd` providing microsecond hardware monitoring.
 * [x] **Adaptive Power Governor v2:** 4-tier state machine (`ACTIVE`, `IDLE`, `LOCKED`, `SUSPENDING`) managing hardware quotas and LoRA scaling.
-* [x] **Dual-Model Inference Cascade:** Dynamic model resolution across Ollama Qwen 2.5 3B, Gemma 4 E4B (4-bit NF4), and Qwen Coder.
+* [x] **Foundation Model Inference Engine:** Google Gemma 4 E4B (4-bit NF4) runtime with automatic local resolution and fallback safety.
 * [x] **Knowledge Vault Reorganization:** Standardized Obsidian memory architecture with explicit model, command, tool, and memory hierarchy.
 * [ ] **Sub-100ms Voice Turnaround:**
   * Optimize Whisper GGML threading and Piper ONNX streaming synthesis to achieve instantaneous conversational responsiveness.

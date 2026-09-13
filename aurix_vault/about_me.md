@@ -25,7 +25,7 @@ This document outlines the core background, preferences, workflow habits, and op
 Huzaifa operates across multiple high-performance software engineering and AI research disciplines:
 
 * **Primary Languages:**
-  * **Python 3.10+ / PyTorch:** AI brain architecture, LLM inference pipelines (Gemma 4 E4B, Ollama Qwen 2.5), Whisper STT, Piper TTS, and agentic routers.
+  * **Python 3.10+ / PyTorch:** AI brain architecture, LLM inference pipelines (Gemma 4 E4B NF4), Whisper STT, Piper TTS, and agentic routers.
   * **Rust 2021 Edition:** Bare-metal system core (`core_engine`), PyO3 C-extension FFI (`core_engine.pyd`, `luna_core.pyd`), hardware power governors, and file jail sandboxing.
   * **TypeScript / Modern Web / Desktop UI:** High-performance interfaces and Tkinter holographic HUD.
 * **Development Environments:**

@@ -1,13 +1,11 @@
 """AURIX Multi-Model Resolver — Automatic model detection, priority selection, and download.
 
-Detects which supported LLM models are available locally (Ollama local models,
-HuggingFace cache, or project models directory), selects the highest-priority model,
-and auto-downloads or pulls if no supported models are found.
+Detects which supported LLM models are available locally (HuggingFace cache
+or project models directory), selects the primary model (Google Gemma 4 E4B),
+and auto-downloads if no supported models are found.
 
-Supported models (priority order):
-    1. qwen2.5:3b-instruct            — Primary   (Ollama, optimized for CPU & low RAM)
-    2. google/gemma-4-E4B-it          — Secondary (Hugging Face)
-    3. Qwen/Qwen2.5-Coder-3B-Instruct — Fallback  (Hugging Face)
+Supported models:
+    1. google/gemma-4-E4B-it          — Primary (Google Gemma 4 E4B NF4)
 """
 
 from __future__ import annotations
@@ -31,7 +29,7 @@ class ModelSpec:
     """Specification for a supported model."""
     model_id: str           # HuggingFace repo ID or Ollama model tag
     alias: str              # Human-readable display name
-    effective_params: str   # Parameter tier label (e.g. "E4B", "3B")
+    effective_params: str   # Parameter tier label (e.g. "E4B")
     priority: int           # Lower = higher priority (1 = primary)
     download_patterns: List[str] = field(default_factory=lambda: [
         "*.json", "*.jinja", "*.md", "*.safetensors",
@@ -41,30 +39,18 @@ class ModelSpec:
 # Ordered by priority (index 0 = highest priority)
 SUPPORTED_MODELS: List[ModelSpec] = [
     ModelSpec(
-        model_id="qwen2.5:3b-instruct",
-        alias="Qwen 2.5 3B Instruct (Ollama Primary)",
-        effective_params="3B",
-        priority=1,
-    ),
-    ModelSpec(
         model_id="google/gemma-4-E4B-it",
-        alias="Gemma 4 E4B Instruct (Secondary)",
+        alias="Gemma 4 E4B Instruct (Primary)",
         effective_params="E4B",
-        priority=2,
-    ),
-    ModelSpec(
-        model_id="Qwen/Qwen2.5-Coder-3B-Instruct",
-        alias="Qwen 2.5 Coder 3B Instruct (Fallback)",
-        effective_params="3B",
-        priority=3,
+        priority=1,
     ),
 ]
 
 # Quick lookup by model_id
 _MODEL_REGISTRY: Dict[str, ModelSpec] = {m.model_id: m for m in SUPPORTED_MODELS}
 
-PRIMARY_MODEL_ID = SUPPORTED_MODELS[0].model_id   # "qwen2.5:3b-instruct"
-SECONDARY_MODEL_ID = SUPPORTED_MODELS[1].model_id  # "google/gemma-4-E4B-it"
+PRIMARY_MODEL_ID = SUPPORTED_MODELS[0].model_id   # "google/gemma-4-E4B-it"
+SECONDARY_MODEL_ID = SUPPORTED_MODELS[0].model_id  # "google/gemma-4-E4B-it"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -294,9 +280,9 @@ def download_primary_model(progress_callback=None) -> str:
             subprocess.run(["ollama", "pull", primary.model_id], check=True)
             return f"ollama:{primary.model_id}"
         except Exception as err:
-            _log(f"Ollama pull failed ({err}). Falling back to secondary HuggingFace model...")
+            _log(f"Ollama pull failed ({err}). Falling back to HuggingFace model...")
 
-    target = next((m for m in SUPPORTED_MODELS if "/" in m.model_id), SUPPORTED_MODELS[1])
+    target = primary
     _log(
         f"Downloading HuggingFace model: '{target.alias}' ({target.model_id})..."
     )
@@ -338,7 +324,7 @@ def resolve_best_model(
     Priority logic:
         1. If config specifies a concrete model (not "auto"), check if it's available
            locally. If yes, use it. If no, fall through to auto-detection.
-        2. Scan for supported models in priority order (Gemma 4 E4B first, then Qwen 2.5 3B).
+        2. Scan for supported models in priority order (Gemma 4 E4B).
         3. If no supported model is found and auto_download is True, download Gemma 4 E4B.
         4. If download also fails, return the primary model ID for remote/fallback loading.
 

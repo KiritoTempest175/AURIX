@@ -81,4 +81,4 @@ AURIX operates a continuous offline wake-word detection pipeline using high-effi
 |---|---|---|---|
 | **Hardware Status** | *"What is my GPU temp?"*, *"How much RAM is free?"* | Returns live metrics from NVML / psutil | **Tier 1** |
 | **Power State** | *"What governor state is active?"* | Reports `ACTIVE`, `IDLE`, or `LOCKED` | **Tier 1** |
-| **Model Status** | *"What model is currently running?"* | Reports active LLM (Ollama Qwen, Gemma 4) | **Tier 1** |
+| **Model Status** | *"What model is currently running?"* | Reports active LLM (Gemma 4 E4B) | **Tier 1** |

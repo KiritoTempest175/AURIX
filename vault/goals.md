@@ -15,7 +15,7 @@ salience: 6
 
 - [x] Rust Core FFI — `core_engine.pyd` / `luna_core.pyd` stable
 - [x] Power Governor v2 — 4-tier state machine (ACTIVE / IDLE / LOCKED / SUSPENDING)
-- [x] Dual-model inference cascade — Ollama Qwen 2.5, Gemma 4 E4B, Qwen Coder
+- [x] Foundation model inference engine — Google Gemma 4 E4B (4-bit NF4)
 - [x] Knowledge vault reorganisation — Obsidian-compatible memory architecture
 - [x] Implement Second Brain runtime module (`ai_brain/second_brain.py`) *(updated 2026-09-12)*
 - [ ] Sub-100 ms voice turnaround — streaming TTS + optimised Whisper threading

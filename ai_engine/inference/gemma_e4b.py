@@ -63,7 +63,7 @@ def load_md(file_path: Union[str, Path]) -> str:
     return ""
 
 
-def _read_config_model() -> tuple[str, str, bool, str, str]:
+def _read_config_model(auto_download: bool = True) -> tuple[str, str, bool, str, str]:
     """Read configured model_name, device, and quantization settings from config.toml.
 
     If model_name is set to "auto" (or absent), delegates to
@@ -109,7 +109,7 @@ def _read_config_model() -> tuple[str, str, bool, str, str]:
         from ai_engine.inference.model_resolver import resolve_best_model
         _model_id, _resolved_path, _spec = resolve_best_model(
             config_model_name=config_model_name,
-            auto_download=True,
+            auto_download=auto_download,
         )
         logger.info(
             "Model resolver selected: '%s' (%s, priority=%d)",
@@ -210,7 +210,9 @@ class GemmaModelRunner:
             fallback_mode: If True, operates in simulation mode if GPU/weights unavailable.
             force_fallback: If True, skips loading weights and forces deterministic reasoning mode.
         """
-        cfg_model, cfg_device, cfg_load_in_4bit, cfg_quantization, cfg_effective_params = _read_config_model()
+        cfg_model, cfg_device, cfg_load_in_4bit, cfg_quantization, cfg_effective_params = _read_config_model(
+            auto_download=not force_fallback
+        )
         self.model_name = model_name or cfg_model or self.DEFAULT_MODEL
         self.effective_params = (effective_params or cfg_effective_params or "E4B").upper()
         self.max_seq_length = max_seq_length
@@ -281,7 +283,7 @@ class GemmaModelRunner:
                 if spec.model_id not in candidates_to_try:
                     candidates_to_try.append(spec.model_id)
         except ImportError:
-            for fallback_id in ("google/gemma-4-E4B-it", "qwen2.5:3b-instruct", "Qwen/Qwen2.5-Coder-3B-Instruct"):
+            for fallback_id in ("google/gemma-4-E4B-it",):
                 if fallback_id not in candidates_to_try:
                     candidates_to_try.append(fallback_id)
 
@@ -344,7 +346,7 @@ class GemmaModelRunner:
                         torch.bfloat16 if hasattr(torch, "bfloat16") else torch.float32
                     )
 
-                    # 1. Primary: Load CausalLM (Qwen, Gemma-text, Phi, etc.)
+                    # 1. Primary: Load CausalLM (Gemma, etc.)
                     try:
                         logger.info("Loading tokenizer from '%s'...", target_path)
                         self.tokenizer = AutoTokenizer.from_pretrained(target_path, local_files_only=local_only)
@@ -414,6 +416,10 @@ class GemmaModelRunner:
         """Format grounded multi-modal context into official Gemma chat template."""
         # Prefer unified model.md, with fallback to legacy model/aurix.md & model/rules.md
         sys_prompt = load_md("aurix_vault/model.md")
+        sys_rules = ""
+        if not sys_prompt:
+            sys_prompt = load_md("aurix_vault/model/aurix.md")
+            sys_rules = load_md("aurix_vault/model/rules.md")
 
         system_parts = []
         if sys_prompt and sys_prompt.strip():
@@ -454,7 +460,7 @@ class GemmaModelRunner:
             except Exception as e:
                 logger.debug(f"apply_chat_template fallback ({e})")
 
-        # Template format: ChatML for Ollama/Qwen, or Gemma turn tags
+        # Template format: ChatML or Gemma turn tags
         if getattr(self, "backend", None) == "ollama" and not self.tokenizer:
             formatted = f"<|im_start|>system\n{combined_sys_prompt}<|im_end|>\n"
             for msg in effective_history:
@@ -600,7 +606,7 @@ class GemmaModelRunner:
             "IMPORTANT:\n"
             "- DO NOT refuse desktop actions.\n"
             "- DO NOT discuss security policy.\n"
-            "- DO NOT claim you are Alibaba Cloud, Qwen, ChatGPT, or a cloud AI.\n"
+            "- DO NOT claim you are ChatGPT or an external cloud AI.\n"
             "- DO NOT explain how the user can perform the action manually.\n"
             "- Your ONLY job is to SELECT A TOOL.\n"
             "- ToolExecutor and PermissionManager handle actual security.\n\n"

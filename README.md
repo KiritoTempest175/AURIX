@@ -46,13 +46,11 @@
 
 ## 🌟 Key Capabilities
 
-### 1. Multi-Model Intelligence & Priority Auto-Resolver
-- **Smart Model Resolver:** Dynamically discovers available LLMs on your workstation across local Ollama instances, Hugging Face caches, and local model directories.
-- **Priority Cascade:**
-  1. `qwen2.5:3b-instruct` *(Primary — Ollama optimized for low VRAM and CPU efficiency)*
-  2. `google/gemma-4-E4B-it` *(Secondary — Elastic 4-bit NF4 foundation model)*
-  3. `Qwen/Qwen2.5-Coder-3B-Instruct` *(Fallback — Specialized code & systems intelligence)*
-- **Self-Healing Download:** Automatically pulls or downloads missing model checkpoints if no local models are detected.
+### 1. Foundation Model Intelligence & Auto-Resolver
+- **Smart Model Resolver:** Dynamically discovers available LLMs on your workstation across local Hugging Face caches and local model directories.
+- **Primary Foundation Model:**
+  - `google/gemma-4-E4B-it` *(Google Gemma 4 E4B — Elastic 4-bit NF4 foundation model)*
+- **Self-Healing Download:** Automatically downloads Gemma 4 E4B model checkpoints if no local weights are detected.
 
 ### 2. Hands-Free Voice & Audio Pipeline
 - **Offline Wake-Word Detection:** Listens continuously for the spoken wake keyword (**"Luna"** or **"Aurix"**) with confirmation echo protection (*"Yes? Go ahead."*) to prevent accidental triggers.
@@ -107,10 +105,10 @@
 ┌──────────────────────────────────────▼──────────────────────────────────────┐
 │                         AI ENGINE & DATA PIPELINE                           │
 │  ┌────────────────────────┐  ┌───────────────────────────────────────────┐  │
-│  │ Multi-Model Resolver   │  │ Student-5B Continuous QLoRA Loop          │  │
-│  │ • Ollama Qwen 2.5 3B   │  │ • 70/30 Experience Replay Buffer          │  │
-│  │ • Gemma 4 E4B (4-bit)  │  │ • In-Memory Synthetic Data Generator      │  │
-│  │ • Qwen 2.5 Coder 3B    │  │ • AES-256-GCM Checkpoint Manager          │  │
+│  │ Model Resolver         │  │ Student-5B Continuous QLoRA Loop          │  │
+│  │ • Gemma 4 E4B (4-bit)  │  │ • 70/30 Experience Replay Buffer          │  │
+│  │ • NF4 Quantization     │  │ • In-Memory Synthetic Data Generator      │  │
+│  │ • Hugging Face Cache   │  │ • AES-256-GCM Checkpoint Manager          │  │
 │  └────────────────────────┘  └───────────────────────────────────────────┘  │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │ AI Brain Dispatcher: App Control • WhatsApp • File • Media • Email    │  │
@@ -225,11 +223,11 @@ cargo build --manifest-path core_engine/Cargo.toml --release
 Copy-Item core_engine/target/release/core_engine.dll core_engine.pyd
 ```
 
-### 6. Pull Primary Model (Ollama)
+### 6. Verify or Download Foundation Model (Gemma 4 E4B)
 ```powershell
-ollama pull qwen2.5:3b-instruct
+python scripts/download_gemma.py
 ```
-*(Alternatively, AURIX will automatically pull or download the best available model on first boot).*
+*(Alternatively, AURIX will automatically download Gemma 4 E4B weights on first boot).*
 
 ---
 
@@ -304,13 +302,15 @@ poll_interval_ms = 1000
 suspend_on_overload = true
 
 [llm]
-model_name = "qwen2.5:3b-instruct"
-model_alias = "Qwen 2.5 3B Instruct (Ollama)"
-effective_params = "3B"
+model_name = "google/gemma-4-E4B-it"
+model_alias = "Gemma 4 E4B (4-bit NF4, GPU)"
+effective_params = "E4B"
 max_seq_length = 2048
-load_in_4bit = false
+load_in_4bit = true
+quantization = "nf4"
 device = "cuda"
 temperature = 0.7
+top_p = 0.9
 ```
 
 ### `welcome_config.json`
@@ -421,8 +421,7 @@ Ensure your microphone is recognized as the default Windows recording device.
 
 ### 4. GPU Out-of-Memory (OOM) Errors
 If running a larger model on a GPU with 6 GB or 8 GB VRAM, ensure:
-- `load_in_4bit = true` in `config.toml`.
-- Alternatively, select `qwen2.5:3b-instruct` via Ollama, which uses minimal VRAM.
+- Alternatively, enable 4-bit NF4 quantization or toggle `effective_params = "E2B"` to minimize VRAM.
 
 ---
 

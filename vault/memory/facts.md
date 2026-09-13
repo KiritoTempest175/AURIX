@@ -26,9 +26,7 @@ Each fact uses inline tags for provenance and date.  Superseded facts are ~~stru
 
 ## AI Models
 
-- [2026-09-12] [stated] primary LLM: Ollama qwen2.5:3b-instruct
-- [2026-09-12] [stated] foundation LLM: google/gemma-4-E4B-it (4-bit NF4)
-- [2026-09-12] [stated] code fallback LLM: Qwen/Qwen2.5-Coder-3B-Instruct
+- [2026-09-12] [stated] primary LLM: google/gemma-4-E4B-it (4-bit NF4)
 - [2026-09-12] [stated] STT model: models/whisper/ggml-base.en.bin
 - [2026-09-12] [stated] TTS model: models/piper/en_US-lessac-medium.onnx
 

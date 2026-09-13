@@ -71,7 +71,7 @@ def _load_model_config():
 _llm_cfg = _load_model_config()
 
 # Model configuration
-MODEL_NAME = _llm_cfg.get("model_name", "google/gemma-4-E4B-it")  # Qwen 3 4B base model
+MODEL_NAME = _llm_cfg.get("model_name", "google/gemma-4-E4B-it")  # Gemma 4 E4B base model
 MAX_SEQ_LENGTH = int(_llm_cfg.get("max_seq_length", 2048))  # Context window — 2K tokens
 LOAD_IN_4BIT = bool(_llm_cfg.get("load_in_4bit", True))     # NF4 quantisation via bitsandbytes
 
