@@ -4,6 +4,26 @@ Supports automated email dispatch via secure Gmail SMTP as well as
 fallback desktop mail client invocation via the Windows 'mailto:' protocol.
 
 SMTP credentials are encrypted at rest using AURIX's CheckpointEncryptor.
+
+Rev. 2 -- adds AI-generated email bodies: give it just a subject line and a
+model runner (e.g. the project's Gemma 4 E4B inference wrapper), and it
+writes and sends the body itself, via generate_body_from_subject() /
+send_email_from_subject(). Everything else in this file is unchanged from
+before.
+
+SAFETY NOTE, stated plainly rather than silently decided: send_email_from_subject()
+does exactly what was asked -- generate a body from the subject, then send it
+-- including over real SMTP with NO review step, if credentials are
+configured. That's a real difference from the confirm-before-send pattern
+used for WhatsApp messages/calls elsewhere in this project (see
+ai_brain/dispatcher.py's two-turn confirmation flow) -- there, nothing
+irreversible happens until the user explicitly says yes to what will
+actually be sent. This method does not have that step. If you want the same
+protection here, wire send_email_from_subject() through a similar
+prepare/confirm/execute split before hooking it into the dispatcher, rather
+than calling it directly on a single user utterance. Not built here because
+it wasn't what was asked -- flagging it so the gap is a known choice, not an
+overlooked one.
 """
 
 from __future__ import annotations
@@ -15,7 +35,7 @@ import logging
 import urllib.parse
 from pathlib import Path
 from email.message import EmailMessage
-from typing import Optional
+from typing import Optional, Protocol
 
 # Ensure project root is in sys.path for direct execution
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -28,6 +48,30 @@ except ImportError:
     get_default_encryptor = None
 
 logger = logging.getLogger("aurix.ai_brain.email_control")
+
+
+class ModelRunnerProtocol(Protocol):
+    """Matches the Gemma 4 E4B inference wrapper's interface as already used
+    elsewhere in this project (see frontend.py's self.gemma_runner usage)."""
+    def format_chat_prompt(self, user_message: str) -> str: ...
+    def generate_response(self, prompt: str) -> str: ...
+
+
+class EmailGenerationError(RuntimeError):
+    """Raised when the AI body-generation step fails or produces nothing
+    usable -- kept distinct from send/SMTP errors so callers can tell
+    'couldn't write it' apart from 'wrote it, couldn't send it'."""
+    pass
+
+
+_BODY_GENERATION_INSTRUCTION = (
+    "Write a clear, appropriately concise email body for an email with this "
+    "subject line: \"{subject}\". Output ONLY the body text itself, ready to "
+    "send -- no subject line repeated back, no placeholder brackets like "
+    "[Your Name], and no meta-commentary about the email. Match the tone to "
+    "what the subject implies (a casual note reads casually, a formal "
+    "request reads formally)."
+)
 
 
 class EmailController:
@@ -43,6 +87,60 @@ class EmailController:
             if get_default_encryptor
             else None
         )
+
+    # ============================================================
+    # AI BODY GENERATION (new)
+    # ============================================================
+
+    def generate_body_from_subject(
+        self,
+        subject: str,
+        model_runner: Optional[ModelRunnerProtocol],
+    ) -> str:
+        """Uses `model_runner` to write a full email body from just a
+        subject line. Raises ValueError/EmailGenerationError rather than
+        returning an empty/placeholder string on failure, so callers can't
+        accidentally send a blank or broken email without noticing.
+        """
+        subject = str(subject or "").strip()
+        if not subject:
+            raise ValueError("Cannot generate an email body from an empty subject.")
+
+        if model_runner is None:
+            raise EmailGenerationError("No AI model is available to generate the email body.")
+
+        prompt_text = _BODY_GENERATION_INSTRUCTION.format(subject=subject)
+        try:
+            prompt = model_runner.format_chat_prompt(user_message=prompt_text)
+            body = model_runner.generate_response(prompt)
+        except Exception as e:
+            raise EmailGenerationError(f"AI email generation failed: {e}") from e
+
+        body = (body or "").strip()
+        if not body:
+            raise EmailGenerationError("AI generated an empty email body.")
+
+        logger.info("Generated email body for subject '%s' (%d chars)", subject, len(body))
+        return body
+
+    def send_email_from_subject(
+        self,
+        to_addr: str,
+        subject: str,
+        model_runner: Optional[ModelRunnerProtocol],
+    ) -> str:
+        """Generates the body from `subject` via `model_runner`, then sends
+        it through the existing send_email() path (SMTP if configured,
+        mailto draft fallback otherwise). See the module docstring's SAFETY
+        NOTE -- there is no confirmation step here; this sends exactly what
+        the AI wrote, over SMTP, with no review, if credentials exist.
+        """
+        try:
+            body = self.generate_body_from_subject(subject, model_runner)
+        except (ValueError, EmailGenerationError) as e:
+            return f"Could not generate the email: {e}"
+
+        return self.send_email(to_addr, subject, body)
 
     # ============================================================
     # CREDENTIAL STORAGE
@@ -387,6 +485,27 @@ if __name__ == "__main__":
 
     controller = EmailController()
 
+    # Lazy-import the real Gemma runner, same graceful-fallback pattern
+    # frontend.py uses -- this test harness has no GUI/session around it, so
+    # there's no other source of a model_runner to test send_email_from_subject
+    # against. If ai_engine isn't importable standalone (e.g. run from a
+    # different working directory, or the model isn't downloaded yet), the
+    # 'smart' command below reports that clearly instead of crashing.
+    _gemma_runner = None
+    _gemma_load_error = None
+
+    def _get_gemma_for_test_mode():
+        global _gemma_runner, _gemma_load_error
+        if _gemma_runner is not None or _gemma_load_error is not None:
+            return _gemma_runner
+        try:
+            from ai_engine.inference.gemma_e4b import get_default_gemma_runner
+            _gemma_runner = get_default_gemma_runner()
+            return _gemma_runner
+        except Exception as e:
+            _gemma_load_error = str(e)
+            return None
+
     print("=" * 60)
     print(
         "AURIX Email Control — Standalone Test Mode"
@@ -394,7 +513,11 @@ if __name__ == "__main__":
     print("Commands:")
     print(
         "  send <to> | <subject> | <body>  "
-        "- Send email via SMTP / mailto"
+        "- Send email via SMTP / mailto (all 3 parts required, pipe-separated)"
+    )
+    print(
+        "  smart <to> | <subject>          "
+        "- AI writes the body from just the subject, then sends it"
     )
     print(
         "  draft <to> | <subject> | <body> "
@@ -411,6 +534,11 @@ if __name__ == "__main__":
     print(
         "  exit                            "
         "- Quit"
+    )
+    print(
+        "\nNote the '|' separators above are required -- "
+        "'send a@b.com hello there' will NOT work; "
+        "use 'send a@b.com | hello | there' instead."
     )
     print("=" * 60)
 
@@ -473,6 +601,34 @@ if __name__ == "__main__":
                         "setup <email> <app_password>"
                     )
 
+            elif cmd.startswith("smart "):
+
+                parts = [
+                    p.strip()
+                    for p in cmd[6:].split("|", 1)
+                ]
+
+                if len(parts) != 2 or not parts[0] or not parts[1]:
+                    print(
+                        "Usage: smart <to> | <subject>  "
+                        "(both parts required, separated by '|')"
+                    )
+                else:
+                    to, subj = parts
+                    runner = _get_gemma_for_test_mode()
+                    if runner is None:
+                        print(
+                            f"Could not load the Gemma runner for AI generation: "
+                            f"{_gemma_load_error}. (This test harness needs "
+                            f"ai_engine.inference.gemma_e4b to be importable and "
+                            f"the model available -- run this from the project "
+                            f"root, with the model downloaded, or test this "
+                            f"feature from within frontend.py instead.)"
+                        )
+                    else:
+                        print(f"Asking Gemma to write the body for subject: {subj!r}...")
+                        print(controller.send_email_from_subject(to, subj, runner))
+
             elif cmd.startswith("draft "):
 
                 parts = [
@@ -519,31 +675,20 @@ if __name__ == "__main__":
                     )
                 ]
 
-                to = (
-                    parts[0]
-                    if len(parts) > 0
-                    else ""
-                )
-
-                subj = (
-                    parts[1]
-                    if len(parts) > 1
-                    else ""
-                )
-
-                body = (
-                    parts[2]
-                    if len(parts) > 2
-                    else ""
-                )
-
-                print(
-                    controller.send_email(
-                        to,
-                        subj,
-                        body,
+                if len(parts) != 3 or not all(parts):
+                    print(
+                        "Usage: send <to> | <subject> | <body>  "
+                        "(all 3 parts required, separated by '|')"
                     )
-                )
+                else:
+                    to, subj, body = parts
+                    print(
+                        controller.send_email(
+                            to,
+                            subj,
+                            body,
+                        )
+                    )
 
             else:
                 print(
