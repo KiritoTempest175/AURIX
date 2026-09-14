@@ -83,3 +83,10 @@ voices/
 # Generated Guides & Docs
 AURIX_Comprehensive_System_Guide.pdf
 aurix_guide.html
+
+# Frontend (React + Vite + Tauri)
+frontend/node_modules/
+frontend/dist/
+frontend/src-tauri/target/
+frontend/src-tauri/gen/
+frontend/package-lock.json

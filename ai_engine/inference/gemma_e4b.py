@@ -50,58 +50,12 @@ except ImportError:
     BitsAndBytesConfig = None
     TORCH_AVAILABLE = False
 
-FastLanguageModel = None
-UNSLOTH_AVAILABLE = False
-
-
-def _get_fast_language_model():
-    """
-    Lazily import Unsloth only when CUDA is actually available.
-
-    Unsloth may raise runtime/AssertionError exceptions during import on
-    CPU-only PyTorch builds, so it must never be imported eagerly.
-    """
-    global FastLanguageModel, UNSLOTH_AVAILABLE
-
-    if FastLanguageModel is not None:
-        return FastLanguageModel
-
-    if not TORCH_AVAILABLE or torch is None:
-        return None
-
-    try:
-        if not torch.cuda.is_available():
-            logger.debug(
-                "CUDA is unavailable; skipping optional Unsloth backend."
-            )
-            return None
-    except Exception as exc:
-        logger.warning(
-            "Could not determine CUDA availability; skipping Unsloth: %s",
-            exc,
-        )
-        return None
-
-    try:
-        from unsloth import FastLanguageModel as _FastLanguageModel
-
-        FastLanguageModel = _FastLanguageModel
-        UNSLOTH_AVAILABLE = True
-
-        return FastLanguageModel
-
-    except Exception as exc:
-        # IMPORTANT:
-        # Unsloth can raise AssertionError/RuntimeError, not only ImportError.
-        logger.warning(
-            "Optional Unsloth backend unavailable: %s",
-            exc,
-        )
-
-        FastLanguageModel = None
-        UNSLOTH_AVAILABLE = False
-
-        return None
+try:
+    from unsloth import FastLanguageModel
+    UNSLOTH_AVAILABLE = True
+except ImportError:
+    FastLanguageModel = None
+    UNSLOTH_AVAILABLE = False
 
 
 def load_md(file_path: Union[str, Path]) -> str:
@@ -119,7 +73,7 @@ def load_md(file_path: Union[str, Path]) -> str:
     return ""
 
 
-def _read_config_model(auto_download: bool = True) -> tuple[str, str, bool, str, str]:
+def _read_config_model() -> tuple[str, str, bool, str, str]:
     """Read configured model_name, device, and quantization settings from config.toml.
 
     If model_name is set to "auto" (or absent), delegates to
@@ -165,7 +119,7 @@ def _read_config_model(auto_download: bool = True) -> tuple[str, str, bool, str,
         from ai_engine.inference.model_resolver import resolve_best_model
         _model_id, _resolved_path, _spec = resolve_best_model(
             config_model_name=config_model_name,
-            auto_download=auto_download,
+            auto_download=True,
         )
         logger.info(
             "Model resolver selected: '%s' (%s, priority=%d)",
@@ -266,9 +220,7 @@ class GemmaModelRunner:
             fallback_mode: If True, operates in simulation mode if GPU/weights unavailable.
             force_fallback: If True, skips loading weights and forces deterministic reasoning mode.
         """
-        cfg_model, cfg_device, cfg_load_in_4bit, cfg_quantization, cfg_effective_params = _read_config_model(
-            auto_download=not force_fallback
-        )
+        cfg_model, cfg_device, cfg_load_in_4bit, cfg_quantization, cfg_effective_params = _read_config_model()
         self.model_name = model_name or cfg_model or self.DEFAULT_MODEL
         self.effective_params = (effective_params or cfg_effective_params or "E4B").upper()
         self.max_seq_length = max_seq_length
@@ -299,6 +251,12 @@ class GemmaModelRunner:
         self.processor: Optional[Any] = None
         self.is_loaded: bool = False
         self._history: List[Dict[str, str]] = []
+        # Raw (un-templated) user message, tracked separately so the offline
+        # fallback can match keywords against what the user actually typed
+        # instead of the whole system-prompt+history+message blob (which
+        # always contains words like "hardware"/"status" because that's
+        # part of the persona text baked into every formatted prompt).
+        self._last_raw_message: str = ""
 
         self._initialize_model()
 
@@ -339,7 +297,7 @@ class GemmaModelRunner:
                 if spec.model_id not in candidates_to_try:
                     candidates_to_try.append(spec.model_id)
         except ImportError:
-            for fallback_id in ("google/gemma-4-E4B-it",):
+            for fallback_id in ("google/gemma-4-E4B-it", "qwen2.5:3b-instruct", "Qwen/Qwen2.5-Coder-3B-Instruct"):
                 if fallback_id not in candidates_to_try:
                     candidates_to_try.append(fallback_id)
 
@@ -369,31 +327,18 @@ class GemmaModelRunner:
             logger.info("Attempting to load model weights for '%s' from '%s'...", model_id, target_path)
 
             try:
-                unsloth_backend = (
-                    _get_fast_language_model()
-                    if self.device == "cuda"
-                    else None
-                )
-
-                if unsloth_backend is not None:
+                if UNSLOTH_AVAILABLE and self.device == "cuda":
                     logger.info(
-                        "Loading model (%s) with Unsloth from '%s' in 4-bit %s...",
-                        self.effective_params,
-                        target_path,
-                        self.quantization.upper(),
+                        f"Loading model ({self.effective_params}) with Unsloth from '{target_path}' "
+                        f"in 4-bit {self.quantization.upper()}..."
                     )
-
-                    self.model, self.tokenizer = (
-                        unsloth_backend.from_pretrained(
-                            model_name=target_path,
-                            max_seq_length=self.max_seq_length,
-                            load_in_4bit=self.load_in_4bit,
-                            fast_inference=True,
-                        )
+                    self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                        model_name=target_path,
+                        max_seq_length=self.max_seq_length,
+                        load_in_4bit=self.load_in_4bit,
+                        fast_inference=True,
                     )
-
-                    unsloth_backend.for_inference(self.model)
-
+                    FastLanguageModel.for_inference(self.model)
                 else:
                     # GPU Tensor Core optimizations
                     if self.device == "cuda" and hasattr(torch, "backends"):
@@ -408,14 +353,38 @@ class GemmaModelRunner:
                             load_in_4bit=True,
                             bnb_4bit_quant_type=self.quantization,
                             bnb_4bit_compute_dtype=torch.float16,
-                            llm_int8_enable_fp32_cpu_offload=True,
                         )
+                        # NOTE: llm_int8_enable_fp32_cpu_offload was previously set here.
+                        # That flag is an 8-bit-only escape hatch that tells
+                        # accelerate/transformers "it's fine to spill layers to
+                        # CPU/disk instead of erroring". bitsandbytes 4-bit
+                        # quantized layers cannot actually be offloaded to
+                        # disk, so with it set, an under-estimated device_map
+                        # silently left weights as unmaterialized `meta`
+                        # tensors instead of raising -- that's what produced
+                        # "successfully loaded (VRAM: 112.0 MB)" followed by
+                        # "Tensor on device meta is not on the expected
+                        # device cuda:0!" at first inference. Removing it lets
+                        # a genuine capacity problem surface as a clean OOM
+                        # instead of corrupting the model silently.
 
                     model_dtype = torch.float16 if self.device == "cuda" else (
                         torch.bfloat16 if hasattr(torch, "bfloat16") else torch.float32
                     )
 
-                    # 1. Primary: Load CausalLM (Gemma, etc.)
+                    # Force everything onto the single GPU instead of
+                    # device_map="auto". "auto" lets accelerate guess how to
+                    # split the model across GPU/CPU/disk based on its own
+                    # memory estimate, and that estimate can be wrong -- when
+                    # it under-estimates free VRAM it silently offloads
+                    # layers, which for a 4-bit quantized model produces
+                    # broken `meta` tensors rather than a clear error. Pinning
+                    # everything to cuda:0 means either it loads correctly or
+                    # you get a straightforward CUDA out-of-memory error you
+                    # can act on.
+                    cuda_device_map = {"": 0} if self.device == "cuda" else None
+
+                    # 1. Primary: Load CausalLM (Qwen, Gemma-text, Phi, etc.)
                     try:
                         logger.info("Loading tokenizer from '%s'...", target_path)
                         self.tokenizer = AutoTokenizer.from_pretrained(target_path, local_files_only=local_only)
@@ -423,7 +392,7 @@ class GemmaModelRunner:
                         self.model = AutoModelForCausalLM.from_pretrained(
                             target_path,
                             quantization_config=quant_config,
-                            device_map="auto" if self.device == "cuda" else None,
+                            device_map=cuda_device_map,
                             torch_dtype=model_dtype,
                             low_cpu_mem_usage=True,
                             local_files_only=local_only,
@@ -437,13 +406,28 @@ class GemmaModelRunner:
                             self.model = AutoModelForMultimodalLM.from_pretrained(
                                 target_path,
                                 quantization_config=quant_config,
-                                device_map="auto" if self.device == "cuda" else None,
+                                device_map=cuda_device_map,
                                 torch_dtype=model_dtype,
                                 low_cpu_mem_usage=True,
                                 local_files_only=local_only,
                             )
                         else:
                             raise causal_err
+
+                    # Guard: if anything still ended up on the meta device
+                    # (e.g. a genuinely mismatched checkpoint/class pairing),
+                    # fail loudly here and now instead of at first inference,
+                    # so the candidate loop moves on / logs clearly rather
+                    # than silently landing in the offline stub later.
+                    if any(p.device.type == "meta" for p in self.model.parameters()):
+                        raise RuntimeError(
+                            "Model loaded with one or more parameters left on the "
+                            "'meta' device (never materialized) -- this means "
+                            "device_map placement failed even after pinning to "
+                            "cuda:0. Likely an actual VRAM capacity issue or a "
+                            "checkpoint/model-class mismatch, not a code bug."
+                        )
+
 
                 self.model_name = model_id
                 self.is_loaded = True
@@ -496,8 +480,8 @@ class GemmaModelRunner:
         # implemented; it is now.
         sys_prompt = load_md("aurix_vault/model.md")
         if not sys_prompt.strip():
-            legacy_persona = load_md("aurix_vault/aurix.md") or load_md("aurix_vault/model/aurix.md")
-            legacy_rules = load_md("aurix_vault/rules.md") or load_md("aurix_vault/model/rules.md")
+            legacy_persona = load_md("aurix_vault/aurix.md")
+            legacy_rules = load_md("aurix_vault/rules.md")
             sys_prompt = "\n\n---\n\n".join(
                 part.strip() for part in (legacy_persona, legacy_rules) if part.strip()
             )
@@ -539,7 +523,7 @@ class GemmaModelRunner:
             except Exception as e:
                 logger.debug(f"apply_chat_template fallback ({e})")
 
-        # Template format: ChatML or Gemma turn tags
+        # Template format: ChatML for Ollama/Qwen, or Gemma turn tags
         if getattr(self, "backend", None) == "ollama" and not self.tokenizer:
             formatted = f"<|im_start|>system\n{combined_sys_prompt}<|im_end|>\n"
             for msg in effective_history:
@@ -609,6 +593,7 @@ class GemmaModelRunner:
         if not user_message or not user_message.strip():
             return ""
         clean_message = user_message.strip()
+        self._last_raw_message = clean_message
         prompt = self.format_chat_prompt(
             user_message=clean_message,
             system_instruction=system_instruction,
@@ -673,6 +658,8 @@ class GemmaModelRunner:
                 "args": {},
             }
 
+        self._last_raw_message = text.strip()
+
         system_prompt = (
             "You are AURIX's INTERNAL ACTION ROUTER.\n"
             "You are NOT speaking directly to the user.\n\n"
@@ -685,7 +672,7 @@ class GemmaModelRunner:
             "IMPORTANT:\n"
             "- DO NOT refuse desktop actions.\n"
             "- DO NOT discuss security policy.\n"
-            "- DO NOT claim you are ChatGPT or an external cloud AI.\n"
+            "- DO NOT claim you are Alibaba Cloud, Qwen, ChatGPT, or a cloud AI.\n"
             "- DO NOT explain how the user can perform the action manually.\n"
             "- Your ONLY job is to SELECT A TOOL.\n"
             "- ToolExecutor and PermissionManager handle actual security.\n\n"
@@ -896,8 +883,18 @@ class GemmaModelRunner:
             return self._fallback_generate(prompt)
 
     def _fallback_generate(self, prompt: str) -> str:
-        """Deterministic offline fallback response generator."""
-        prompt_lower = prompt.lower()
+        """Deterministic offline fallback response generator.
+
+        IMPORTANT: `prompt` here is the *fully templated* prompt (system
+        persona + rolling history + user turn). The persona text in
+        aurix_vault/model.md talks about hardware/status monitoring, so
+        keying off `prompt` matched almost every request regardless of what
+        the user actually asked. We key off the raw user message instead,
+        falling back to `prompt` only if we don't have one (e.g. when this
+        is called directly, as in the __main__ demo below).
+        """
+        source_text = self._last_raw_message or prompt
+        prompt_lower = source_text.lower()
         if "status" in prompt_lower or "hardware" in prompt_lower:
             return "LUNA Governor is nominal. Hardware utilization: RAM within 12.0 GB ceiling, VRAM stable on RTX 4060."
         if "self-healing" in prompt_lower or "traceback" in prompt_lower or "error" in prompt_lower:

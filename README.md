@@ -77,12 +77,13 @@
   - **30% User Telemetry:** Scrubbed, sanitized real interaction traces.
 - **Encrypted Atomic Checkpoints:** Checkpoints are encrypted at rest with **AES-256-GCM**, written atomically via pointer files, and guarded by an automated 3-version rollback safety net.
 
-### 6. Cyberpunk Tkinter Desktop HUD
-- Self-contained desktop command center (`frontend.py`) featuring:
-  - Rotating holographic radar core visualizer.
-  - Live system meters: CPU usage, RAM utilization, GPU VRAM, and thermal monitoring.
-  - Live audio waveform and voice status indicators.
-  - Integrated command prompt and live terminal logs.
+### 6. React + Tauri v2 Desktop Shell
+- Modern desktop command center (`frontend/`) built with React, Vite, and Tauri v2 featuring:
+  - Animated orb centerpiece with orbital ring animations.
+  - Live system telemetry: CPU, RAM, GPU usage, and thermal monitoring.
+  - Live audio waveform and voice status indicators (Standby / Listening / Processing).
+  - Integrated chat panel wired to the AURIX AI brain via a Python bridge server.
+  - Glassmorphism panels with dark navy + gold accent design system.
 
 ---
 
@@ -91,7 +92,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           NATIVE UI & AUDIO TIER                            │
-│  Cyberpunk Tkinter HUD (frontend.py)  │  Whisper STT (16 kHz Local GGML)     │
+│  React + Tauri Desktop Shell          │  Whisper STT (16 kHz Local GGML)     │
 │  Piper Neural TTS Engine              │  Offline Wake-Word Detector         │
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        │ (Direct In-Process / PyO3 FFI)
@@ -233,13 +234,18 @@ python scripts/download_gemma.py
 
 ## 🚀 Quick Start
 
-### Launch the AURIX Command Center Desktop GUI
+### Launch the AURIX Desktop Shell
 ```powershell
-python frontend.py
+cd frontend
+npm install
+npm run dev
 ```
-*Or use the convenience PowerShell launcher:*
+*This starts the Vite dev server at http://localhost:1420 and auto-spawns the Python bridge server.*
+
+*To run as a native desktop app (requires Rust toolchain + Tauri prerequisites):*
 ```powershell
-.\scripts\run_luna.ps1
+cd frontend
+npm run tauri dev
 ```
 
 ### Run Comprehensive Test Suite
@@ -379,7 +385,11 @@ AURIX/
 │   ├── python/                    # Subsystem Unit & Integration Tests
 │   └── rust/                      # Native Core Engine Unit Tests
 ├── config.toml                    # Master Configuration File
-├── frontend.py                    # Cyberpunk Tkinter Desktop HUD (Primary GUI)
+├── frontend/                      # React + Vite + Tauri v2 Desktop Shell
+│   ├── src/App.jsx                # Main UI (orb, nav, telemetry, chat)
+│   ├── src/App.css                # Design system (dark navy, gold accent)
+│   ├── src-tauri/                 # Tauri v2 Rust backend
+│   └── bridge_server.py           # Python HTTP bridge to AI brain
 ├── pyproject.toml                 # Python Package Metadata & Build Configuration
 ├── requirements.txt               # Locked Dependencies
 └── welcome_config.json            # Vocal Startup Greeting Configuration
