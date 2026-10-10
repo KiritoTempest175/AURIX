@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 const NATIVE = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 const OFFLINE_WARNING = "For installing Ollama or downloading models, turn OFF Offline Mode in System controls.";
 
-export default function ModelsPanel({ workerOnline, offline }) {
+export default function ModelsPanel({ workerOnline, offline, onOfflineChange }) {
   const [snapshot, setSnapshot] = useState(null);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -107,7 +107,19 @@ export default function ModelsPanel({ workerOnline, offline }) {
         </button>
       </div>
       {!snapshot?.ollama_connected && <p>Open Ollama after installation. AURIX will connect to its local service, not a cloud LLM API. Installation uses the official <strong>Ollama.Ollama</strong> winget package.</p>}
-      {offline && <p className="model-notice">{OFFLINE_WARNING} Already installed models still work offline.</p>}
+      {offline && (
+        <div className="model-offline-controls">
+          <p className="model-notice">{OFFLINE_WARNING}</p>
+          <button type="button" disabled={!workerOnline || Boolean(busy)} onClick={async () => {
+            try {
+              await invoke("set_offline_mode", { enabled: false });
+              onOfflineChange?.(false);
+              setError("");
+              setStatus("Downloads enabled for this session.");
+            } catch (error) { setError(String(error)); }
+          }}>Enable model downloads</button>
+        </div>
+      )}
       <h3>Recommended models</h3>
       <div className="models-grid">
         {models.map((model) => {
