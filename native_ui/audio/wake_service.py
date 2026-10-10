@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import threading
+import time
 from collections import deque
 from pathlib import Path
 
@@ -21,6 +22,7 @@ _STOP = threading.Event()
 _THREAD: threading.Thread | None = None
 _EVENTS: deque[dict] = deque(maxlen=20)
 _FAILURE = ""
+_ARMED_UNTIL = 0.0
 _LOADED = False
 _ENABLED = False
 _WAKE = re.compile(r"\b(?:hey|hello|okay|ok)\s+luna\b|\bluna\b|\bhey\s+aurix\b", re.I)
@@ -59,7 +61,7 @@ def _ensure_loaded() -> None:
 
 
 def _listen() -> None:
-    global _FAILURE
+    global _FAILURE, _ARMED_UNTIL
     from native_ui.audio.offline_voice import transcribe_microphone
     while not _STOP.is_set():
         try:
@@ -68,9 +70,16 @@ def _listen() -> None:
                 break
             match = _WAKE.search(heard)
             if match:
+                command = heard[match.end():].strip(" ,.!?")[:500]
                 with _LOCK:
-                    _EVENTS.append({"kind": "wake", "command": heard[match.end():].strip(" ,.!?")[:500]})
+                    _EVENTS.append({"kind": "wake", "command": command})
+                    _ARMED_UNTIL = time.monotonic() + (0 if command else 23)
                     _FAILURE = ""
+            elif heard.strip():
+                with _LOCK:
+                    if _ARMED_UNTIL > time.monotonic():
+                        _EVENTS.append({"kind": "command", "command": heard.strip()[:500]})
+                        _ARMED_UNTIL = 0
         except RuntimeError as exc:
             if str(exc) in {"WINDOWS_SPEECH_UNAVAILABLE", "NO_STT_MODEL", "VOICE_DEPENDENCY_MISSING"}:
                 with _LOCK:
@@ -96,7 +105,7 @@ def _start() -> None:
 
 
 def configure(enabled: bool) -> dict:
-    global _ENABLED
+    global _ENABLED, _ARMED_UNTIL
     if type(enabled) is not bool:
         raise ValueError("INVALID_WAKE_SETTING")
     with _LOCK:
@@ -107,6 +116,7 @@ def configure(enabled: bool) -> dict:
             _start()
         else:
             _STOP.set()
+            _ARMED_UNTIL = 0
         return status()
 
 
