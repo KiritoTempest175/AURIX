@@ -65,6 +65,8 @@ class SecureServer(ThreadingHTTPServer):
         self.limit = threading.BoundedSemaphore(8)
 
     def process_request(self, request, client_address):
+        # Slow or idle clients must not hold a bounded worker thread forever.
+        request.settimeout(15.0)
         if not self.limit.acquire(blocking=False):
             request.close()
             return
@@ -102,6 +104,10 @@ class BridgeHandler(BaseHTTPRequestHandler):
         # A browser is not an authorized client. Neither CORS nor preflight
         # responses are granted, even when browser JS knows a port.
         if self.headers.get("Origin") is not None:
+            return False
+        if self.headers.get("Referer") is not None:
+            return False
+        if self.headers.get("Sec-Fetch-Site") is not None:
             return False
         expected = "Bearer " + self.server.token
         return secrets.compare_digest(

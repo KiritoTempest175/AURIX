@@ -111,6 +111,9 @@ fn launch_worker(token: &str) -> Result<Child, String> {
     if app_dir.join("aurix-worker.exe").is_file() {
         return spawn_bundled_worker(token);
     }
+    // Never run an arbitrary Python checkout based on cwd or AURIX_ROOT from
+    // a release build. A packaged installer may only start its own sidecar.
+    #[cfg(debug_assertions)]
     if let Some(root) = discover_root() {
         return spawn_bridge(&root, token);
     }
@@ -593,7 +596,10 @@ fn main() {
         Ok(child) => (Some(child), String::new()),
         Err(error) => (None, error),
     };
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(120))
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .build().expect("Unable to create local HTTP client");
     tauri::Builder::default()
         .manage(SysState(Mutex::new(System::new_all())))

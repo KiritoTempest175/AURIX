@@ -55,3 +55,20 @@ def test_vault_rejects_sibling_prefix(tmp_path: Path):
 
 def test_preview_requires_pending_action():
     assert ToolExecutor().preview_pending("not-a-real-request")["error"] == "NOT_FOUND"
+
+
+def test_bridge_rejects_referer_and_browser_fetch_metadata():
+    handler = object.__new__(BridgeHandler)
+    token = "temporary-secret-for-testing"
+    handler.server = Mock(server_port=9721, token=token)
+    for forbidden in (
+        {"Referer": "http://127.0.0.1:9721/"},
+        {"Sec-Fetch-Site": "none"},
+        {"Sec-Fetch-Site": "cross-site"},
+    ):
+        handler.headers = {
+            "Host": "127.0.0.1:9721",
+            "Authorization": "Bearer " + token,
+            **forbidden,
+        }
+        assert not handler._authorized()

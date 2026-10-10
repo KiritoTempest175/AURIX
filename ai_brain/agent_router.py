@@ -155,7 +155,7 @@ class AgentRouter:
             action = "close" if verb in {"close", "exit"} else "open"
             if self.executor._safe_desktop_app(name, action):
                 tool = "close_app" if action == "close" else "open_app"
-                return self.executor.execute(tool, {"target": name}), True
+                return self.executor.execute(tool, {"target": name.casefold()}), True
 
         # --------------------------------------------------------
         # STEP 1:
