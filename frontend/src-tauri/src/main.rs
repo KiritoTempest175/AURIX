@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use rand::RngCore;
+use nvml_wrapper::{Nvml, enum_wrappers::device::TemperatureSensor};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -71,7 +72,7 @@ fn check_response(status: reqwest::StatusCode) -> Result<(), String> {
 }
 
 #[derive(Serialize)]
-struct Telemetry { cpu: f32, ram: f32, gpu: Option<f32>, gpu_temp: Option<f32> }
+struct Telemetry { cpu: f32, ram: f32, gpu: Option<f32>, gpu_temp: Option<f32>, vram_mb: Option<f32> }
 struct SysState(Mutex<System>);
 
 #[tauri::command]
@@ -80,7 +81,20 @@ fn get_telemetry(state: State<'_, SysState>) -> Telemetry {
     sys.refresh_cpu_usage();
     sys.refresh_memory();
     let ram = sys.used_memory() as f32 / sys.total_memory().max(1) as f32 * 100.0;
-    Telemetry { cpu: sys.global_cpu_usage(), ram, gpu: None, gpu_temp: None }
+    // NVML reports real device statistics, not invented zeros. Without an
+    // NVIDIA-compatible driver these fields remain unavailable.
+    let (gpu, gpu_temp, vram_mb) = match Nvml::init() {
+        Ok(nvml) => match nvml.device_by_index(0) {
+            Ok(device) => (
+                device.utilization_rates().ok().map(|v| v.gpu as f32),
+                device.temperature(TemperatureSensor::Gpu).ok().map(|v| v as f32),
+                device.memory_info().ok().map(|v| v.used as f32 / (1024.0 * 1024.0)),
+            ),
+            Err(_) => (None, None, None),
+        },
+        Err(_) => (None, None, None),
+    };
+    Telemetry { cpu: sys.global_cpu_usage(), ram, gpu, gpu_temp, vram_mb }
 }
 
 #[derive(Deserialize)]

@@ -13,11 +13,9 @@ async function apiDispatch(text) {
 
 async function apiTelemetry() {
   if (!isTauri()) return { cpu: null, ram: null, gpu: null, gpu_temp: null };
-  try {
-    return await invoke("get_bridge_telemetry");
-  } catch {
-    return invoke("get_telemetry");
-  }
+  // Native Rust reads actual CPU/RAM and optional NVIDIA NVML metrics.
+  // Never silently fill missing GPU values with zero.
+  return invoke("get_telemetry");
 }
 
 // ---------------------------------------------------------------------------

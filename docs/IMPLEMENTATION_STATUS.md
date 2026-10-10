@@ -21,14 +21,14 @@ Updated: 2026-10-10. Status is based on code changes, not an executed Windows pe
 | M-03 | Partially fixed | Reused reqwest client with 120-second timeout; need individual deadlines/cancel support |
 | M-04 | Fixed in source | React `isTauri()`; browser no longer calls private localhost API |
 | M-05 | Mitigated by honest UI | Voice button reports unavailable instead of invented transcript |
-| M-06 | Partially fixed | UI health based on worker probe; GPU reported N/A pending NVML wiring |
+| M-06 | Partially fixed | UI worker health is probed, native Rust telemetry now reads GPU utilization/temperature/VRAM via NVML when supported; full historical health and charts remain |
 | M-07 | Open | `config.toml` remains authoritative for tool permissions, but legacy `config/luna.toml` is still referenced |
 | M-08 | Open | Lock files, pip/npm audits and pinned dependency updates still required |
 | M-09 | Partially fixed | New `tests/test_bridge_security.py`; full installer/IPC abuse-case suite missing |
 | M-10 | Open | Existing DB schema contains audit table, but native dialog events not durably recorded |
 | M-11 | Fixed for root docs | Replaced README/security docs with explicit current limitations |
 | M-12 | Mitigated by disabling generic shell | Windows shell executor remains incomplete; bound output, process termination and child job control not implemented |
-| L-01 | Open | Duplicate `AppCloser` remains and should be refactored with regression tests |
+| L-01 | Fixed in source | Removed duplicate `AppCloser` declaration from `ai_brain/app_control.py` |
 | L-02 | Open | No WCAG contrast/accessibility verification yet |
 | L-03 | Mitigated | Nonfunctional nav buttons disabled; actual panels remain to implement |
 | L-04 | Fixed in root docs | Correct repo URL, accurate developer setup and screenshot limitations |
