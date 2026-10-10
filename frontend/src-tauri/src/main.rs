@@ -272,7 +272,8 @@ async fn get_bridge_health(state: State<'_, BridgeState>) -> Result<bool, String
 #[cfg(windows)]
 fn native_approve(description: &str) -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO
+        MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO,
+        MB_SETFOREGROUND, MB_TOPMOST
     };
     let title: Vec<u16> = "AURIX — Authorize action\0".encode_utf16().collect();
     let details: Vec<u16> = format!(
@@ -280,7 +281,7 @@ fn native_approve(description: &str) -> bool {
         description
     ).encode_utf16().chain(std::iter::once(0)).collect();
     unsafe { MessageBoxW(0, details.as_ptr(), title.as_ptr(),
-        MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES }
+        MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_SETFOREGROUND | MB_TOPMOST) == IDYES }
 }
 
 #[cfg(not(windows))]

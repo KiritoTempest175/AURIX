@@ -391,10 +391,14 @@ export default function App() {
       if (reply.startsWith("TRUST_TOKEN_REQUIRED:")) {
         const [, id, ...description] = reply.split(":");
         if (/^[a-f0-9]{12}$/i.test(id)) {
-          setApproval({ id, description: description.join(":") });
-          setMessages((m) => [...m, {
-            from: "aurix", text: "This action requires explicit native confirmation.",
-          }]);
+          // A single native Windows dialog replaces the double-confirmation.
+          setMessages(m => [...m, { from: "aurix", text: "Please review the Windows permission dialog." }]);
+          try {
+            const reviewed = await invoke("execute_trust", { payload: { request: id } });
+            setMessages(m => [...m, { from: "aurix", text: reviewed.result || "Action finished." }]);
+          } catch (error) {
+            setMessages(m => [...m, { from: "aurix", text: "Approval was not completed: " + String(error) }]);
+          }
         } else {
           setMessages((m) => [...m, { from: "aurix", text: "Invalid approval request." }]);
         }

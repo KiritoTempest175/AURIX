@@ -143,6 +143,20 @@ class AgentRouter:
 
             return prompt, True
 
+        # Narrow deterministic routing for common apps works even without an
+        # installed LLM, but unknown executables never bypass approval.
+        import re
+        simple = re.fullmatch(
+            r"(?:please\s+)?(open|launch|start|close|exit)\s+(.+?)(?:\s+app)?[.!]?",
+            clean_text, flags=re.I,
+        )
+        if simple:
+            verb, name = simple.group(1).lower(), simple.group(2).strip()
+            action = "close" if verb in {"close", "exit"} else "open"
+            if self.executor._safe_desktop_app(name, action):
+                tool = "close_app" if action == "close" else "open_app"
+                return self.executor.execute(tool, {"target": name}), True
+
         # --------------------------------------------------------
         # STEP 1:
         # Ask the LLM what the user actually wants.

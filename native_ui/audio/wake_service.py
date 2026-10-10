@@ -87,6 +87,7 @@ def _listen() -> None:
 def _start() -> None:
     global _THREAD, _FAILURE
     if _THREAD and _THREAD.is_alive():
+        _STOP.clear()
         return
     _FAILURE = ""
     _STOP.clear()

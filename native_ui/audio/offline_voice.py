@@ -49,8 +49,8 @@ $engine = $null
 try {
     Add-Type -AssemblyName System.Speech
     $culture = [System.Globalization.CultureInfo]::GetCultureInfo('en-US')
-    $engine = New-Object System.Speech.Recognition.SpeechRecognitionEngine($culture)
-    $grammar = New-Object System.Speech.Recognition.DictationGrammar
+    $engine = [System.Speech.Recognition.SpeechRecognitionEngine]::new($culture)
+    $grammar = [System.Speech.Recognition.DictationGrammar]::new()
     $engine.LoadGrammar($grammar)
     $engine.SetInputToDefaultAudioDevice()
     $result = $engine.Recognize([TimeSpan]::FromSeconds(8))
@@ -83,8 +83,9 @@ def speech_backend() -> str:
     """Report which offline microphone backend can be attempted."""
     try:
         _model_path(_config())
-        import sounddevice
-        from faster_whisper import WhisperModel
+        import importlib.util
+        if importlib.util.find_spec("sounddevice") is None or importlib.util.find_spec("faster_whisper") is None:
+            raise ImportError
         return "whisper"
     except (RuntimeError, ImportError, OSError):
         return "windows_speech" if sys.platform == "win32" else "unavailable"
