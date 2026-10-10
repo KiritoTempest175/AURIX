@@ -130,17 +130,3 @@ jobs:
           gh release create $tag @paths --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AURIX $tag — Windows Preview" --notes-file 'preview-release-notes.md' --prerelease --latest=false
           if ($LASTEXITCODE -ne 0) { throw "GitHub preview release creation failed" }
 
-      # The owner requires a main-only repository. The previous hardening PR
-      # was closed without merging because its GGUF-only runtime conflicts
-      # with the later explicit Ollama desktop requirement.
-      - name: Remove obsolete non-main branch after successful preview
-        if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[publish-preview]')) }}
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $branch = 'fix/release-hardening'
-          gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/git/refs/heads/$branch"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Branch cleanup did not complete; check the repository branch list."
-          }
