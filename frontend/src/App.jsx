@@ -171,6 +171,23 @@ export default function App() {
     return () => { active = false; clearInterval(pollId); };
   }, []);
 
+  // On first run, open local model setup rather than showing an unusable chat.
+  // Nothing is installed or downloaded without a separate user interaction.
+  useEffect(() => {
+    if (!workerOnline || !isTauri()) return;
+    let active = true;
+    invoke("list_model_choices").then((models) => {
+      if (!active) return;
+      if (models.backend === "ollama" &&
+          !Array.isArray(models.installed) ||
+          (models.backend === "ollama" &&
+           !models.installed.includes(models.selected))) {
+        setActiveView((current) => current === "Command" ? "Models" : current);
+      }
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [workerOnline]);
+
   const loadMemories = useCallback(async () => {
     if (!isTauri()) return;
     try {
