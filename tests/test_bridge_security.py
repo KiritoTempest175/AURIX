@@ -72,3 +72,15 @@ def test_bridge_rejects_referer_and_browser_fetch_metadata():
             **forbidden,
         }
         assert not handler._authorized()
+
+
+def test_worker_port_is_selected_from_validated_local_env(monkeypatch):
+    from frontend.bridge_server import bridge_port
+    monkeypatch.delenv("AURIX_BRIDGE_PORT", raising=False)
+    assert bridge_port() == 9721
+    monkeypatch.setenv("AURIX_BRIDGE_PORT", "58231")
+    assert bridge_port() == 58231
+    for bad in ("0", "80", "65536", "-1", "http://evil.invalid", "not-a-number"):
+        monkeypatch.setenv("AURIX_BRIDGE_PORT", bad)
+        with pytest.raises(ValueError, match="INVALID_BRIDGE_PORT"):
+            bridge_port()

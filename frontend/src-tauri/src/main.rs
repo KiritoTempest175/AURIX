@@ -12,10 +12,22 @@ use tauri::{Emitter, Manager, State};
 mod telemetry_store;
 use telemetry_store::{MetricPoint, TelemetryStore};
 
-const BRIDGE_URL: &str = "http://127.0.0.1:9721";
+fn bridge_url(state: &BridgeState, route: &str) -> String {
+    format!("http://127.0.0.1:{}{}", state.port, route)
+}
+
+fn unused_bridge_port() -> Result<u16, String> {
+    // The OS chooses an ephemeral loopback port. The listener is released
+    // before spawning the bundled worker; the bearer secret still gates use.
+    let socket = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|_| "Unable to allocate a local worker port".to_string())?;
+    socket.local_addr().map(|address| address.port())
+        .map_err(|_| "Unable to identify local worker port".to_string())
+}
 
 struct BridgeState {
     token: String,
+    port: u16,
     process: Mutex<Option<Child>>,
     client: reqwest::Client,
     startup_error: Mutex<String>,
@@ -69,7 +81,7 @@ fn worker_log_path() -> PathBuf {
     std::env::temp_dir().join("AURIX").join("logs").join("worker.log")
 }
 
-fn spawn_bundled_worker(token: &str) -> Result<Child, String> {
+fn spawn_bundled_worker(token: &str, port: u16) -> Result<Child, String> {
     let app_dir = std::env::current_exe()
         .map_err(|_| "Cannot determine AURIX installation directory".to_string())?
         .parent().ok_or("Cannot determine AURIX executable directory")?.to_path_buf();
@@ -79,6 +91,7 @@ fn spawn_bundled_worker(token: &str) -> Result<Child, String> {
     }
     Command::new(candidate)
         .env("AURIX_BRIDGE_TOKEN", token)
+        .env("AURIX_BRIDGE_PORT", port.to_string())
         .env("AURIX_BRIDGE_HOST", "127.0.0.1")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -86,13 +99,14 @@ fn spawn_bundled_worker(token: &str) -> Result<Child, String> {
         .map_err(|error| format!("Cannot launch the bundled worker ({:?}). Check antivirus quarantine and installation.", error.kind()))
 }
 
-fn spawn_bridge(root: &Path, token: &str) -> Result<Child, String> {
+fn spawn_bridge(root: &Path, token: &str, port: u16) -> Result<Child, String> {
     let entry = root.join("frontend/bridge_server.py");
     for python in ["python", "python3"] {
         if let Ok(child) = Command::new(python)
             .arg(&entry)
             .current_dir(root)
             .env("AURIX_BRIDGE_TOKEN", token)
+            .env("AURIX_BRIDGE_PORT", port.to_string())
             .env("AURIX_BRIDGE_HOST", "127.0.0.1")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -104,20 +118,20 @@ fn spawn_bridge(root: &Path, token: &str) -> Result<Child, String> {
     Err("Python worker could not launch from source. Install Python 3.10+ and project dependencies.".into())
 }
 
-fn launch_worker(token: &str) -> Result<Child, String> {
+fn launch_worker(token: &str, port: u16) -> Result<Child, String> {
     let app_dir = std::env::current_exe()
         .map_err(|_| "Cannot resolve AURIX executable".to_string())?
         .parent().ok_or("Cannot resolve AURIX executable directory")?.to_path_buf();
     if app_dir.join("aurix-worker.exe").is_file() {
-        return spawn_bundled_worker(token);
+        return spawn_bundled_worker(token, port);
     }
     // Never run an arbitrary Python checkout based on cwd or AURIX_ROOT from
     // a release build. A packaged installer may only start its own sidecar.
     #[cfg(debug_assertions)]
     if let Some(root) = discover_root() {
-        return spawn_bridge(&root, token);
+        return spawn_bridge(&root, token, port);
     }
-    spawn_bundled_worker(token)
+    spawn_bundled_worker(token, port)
 }
 
 #[derive(Serialize)]
@@ -145,7 +159,7 @@ fn get_worker_diagnostics(state: State<'_, BridgeState>) -> WorkerDiagnostics {
             },
             Ok(None) => return WorkerDiagnostics {
                 state: "starting",
-                message: "Worker process is running but has not responded yet. If this persists, check worker.log and local port 9721.".into(),
+                message: format!("Worker is running but not responding on local port {}. Check worker.log.", state.port),
                 log_path,
             },
             Err(_) => return WorkerDiagnostics {
@@ -170,7 +184,7 @@ fn restart_ai_worker(state: State<'_, BridgeState>) -> Result<String, String> {
         let _ = old.kill();
         let _ = old.wait();
     }
-    match launch_worker(&state.token) {
+    match launch_worker(&state.token, state.port) {
         Ok(child) => {
             *guard = Some(child);
             if let Ok(mut message) = state.startup_error.lock() { message.clear(); }
@@ -248,7 +262,7 @@ struct TrustResponse { result: String }
 #[tauri::command]
 async fn send_message(payload: DispatchRequest, state: State<'_, BridgeState>) -> Result<DispatchResponse, String> {
     if payload.text.len() > 16000 { return Err("Input is too long".into()); }
-    let response = state.client.post(format!("{BRIDGE_URL}/dispatch"))
+    let response = state.client.post(bridge_url(&state, "/dispatch"))
         .bearer_auth(&state.token).json(&serde_json::json!({"text":payload.text}))
         .send().await.map_err(|_| "Local AI worker is unavailable".to_string())?;
     check_response(response.status())?;
@@ -257,7 +271,7 @@ async fn send_message(payload: DispatchRequest, state: State<'_, BridgeState>) -
 
 #[tauri::command]
 async fn get_bridge_telemetry(state: State<'_, BridgeState>) -> Result<BridgeTelemetry, String> {
-    let response = state.client.get(format!("{BRIDGE_URL}/telemetry"))
+    let response = state.client.get(bridge_url(&state, "/telemetry"))
         .bearer_auth(&state.token).send().await
         .map_err(|_| "Local AI worker unavailable".to_string())?;
     check_response(response.status())?;
@@ -266,7 +280,7 @@ async fn get_bridge_telemetry(state: State<'_, BridgeState>) -> Result<BridgeTel
 
 #[tauri::command]
 async fn get_bridge_health(state: State<'_, BridgeState>) -> Result<bool, String> {
-    let response = state.client.get(format!("{BRIDGE_URL}/health"))
+    let response = state.client.get(bridge_url(&state, "/health"))
         .bearer_auth(&state.token).send().await
         .map_err(|_| "Local AI worker unavailable".to_string())?;
     Ok(response.status().is_success())
@@ -296,7 +310,7 @@ async fn execute_trust(payload: TrustRequest, state: State<'_, BridgeState>) -> 
     if request.len() != 12 || !request.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("Invalid approval identifier".into());
     }
-    let response = state.client.post(format!("{BRIDGE_URL}/trust_preview"))
+    let response = state.client.post(bridge_url(&state, "/trust_preview"))
         .bearer_auth(&state.token)
         .json(&serde_json::json!({"request":request}))
         .send().await.map_err(|_| "Local AI worker unavailable".to_string())?;
@@ -310,7 +324,7 @@ async fn execute_trust(payload: TrustRequest, state: State<'_, BridgeState>) -> 
         let _ = local_post(&state, "/reject_trust", serde_json::json!({"request": request})).await;
         return Ok(TrustResponse { result: "Action rejected by user.".into() });
     }
-    let result = state.client.post(format!("{BRIDGE_URL}/execute_trust"))
+    let result = state.client.post(bridge_url(&state, "/execute_trust"))
         .bearer_auth(&state.token).json(&serde_json::json!({"request":request}))
         .send().await.map_err(|_| "Local AI worker unavailable".to_string())?;
     check_response(result.status())?;
@@ -321,7 +335,7 @@ async fn execute_trust(payload: TrustRequest, state: State<'_, BridgeState>) -> 
 // Native-only application APIs. All use the confidential session bearer;
 // the renderer can never send arbitrary URLs or read the secret.
 async fn local_get(state: &BridgeState, route: &str) -> Result<serde_json::Value, String> {
-    let res = state.client.get(format!("{BRIDGE_URL}{route}"))
+    let res = state.client.get(bridge_url(state, route))
         .bearer_auth(&state.token).send().await
         .map_err(|_| "Private worker unavailable".to_string())?;
     check_response(res.status())?;
@@ -591,7 +605,8 @@ async fn resume_actions(state: State<'_, BridgeState>) -> Result<serde_json::Val
 
 fn main() {
     let token = secret();
-    let worker_start = launch_worker(&token);
+    let port = unused_bridge_port().expect("Unable to allocate worker port");
+    let worker_start = launch_worker(&token, port);
     let (child, startup_error) = match worker_start {
         Ok(child) => (Some(child), String::new()),
         Err(error) => (None, error),
@@ -629,7 +644,7 @@ fn main() {
             Ok(())
         })
         .manage(BridgeState {
-            token, process: Mutex::new(child), client,
+            token, port, process: Mutex::new(child), client,
             startup_error: Mutex::new(startup_error),
             log_path: worker_log_path(),
         })

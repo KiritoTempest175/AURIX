@@ -363,6 +363,16 @@ def configure_worker_logging() -> Path:
     return path
 
 
+def bridge_port() -> int:
+    raw = os.environ.get("AURIX_BRIDGE_PORT", "9721")
+    if not raw.isascii() or not raw.isdecimal():
+        raise ValueError("INVALID_BRIDGE_PORT")
+    port = int(raw)
+    if not 1024 <= port <= 65535:
+        raise ValueError("INVALID_BRIDGE_PORT")
+    return port
+
+
 def main():
     configure_worker_logging()
     LOG.info("Starting AURIX Python bridge")
@@ -371,7 +381,7 @@ def main():
     token = os.environ.get("AURIX_BRIDGE_TOKEN", "")
     if len(token) < 40:
         raise SystemExit("Bridge requires a Tauri-generated session secret")
-    server = SecureServer(("127.0.0.1", 9721), BridgeHandler, token)
+    server = SecureServer(("127.0.0.1", bridge_port()), BridgeHandler, token)
     LOG.info("Private bridge running on 127.0.0.1 (authenticated)")
     def reap_idle_model():
         while not stop_reaper.wait(10.0):
