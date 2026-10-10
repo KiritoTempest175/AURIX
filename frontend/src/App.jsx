@@ -178,15 +178,17 @@ export default function App() {
             const intro = "Hello. LUNA is online and ready.";
             setGreeting(intro);
             setMessages(m => [...m, { from: "aurix", text: intro }]);
-            // WebView2 provides platform voice output when available.
-            // Greeting is not blocked by an optional Piper model.
-            try {
-              if ("speechSynthesis" in window && "SpeechSynthesisUtterance" in window) {
-                const say = new window.SpeechSynthesisUtterance(intro);
-                say.rate = 1.04;
-                window.speechSynthesis.speak(say);
-              }
-            } catch { /* Keep visual greeting when system speech is missing. */ }
+            // The packaged Windows worker uses a built-in system voice when
+            // Piper is not configured. WebView speech is the fallback.
+            void invoke("speak_text", { text: intro }).catch(() => {
+              try {
+                if ("speechSynthesis" in window && "SpeechSynthesisUtterance" in window) {
+                  const say = new window.SpeechSynthesisUtterance(intro);
+                  say.rate = 1.04;
+                  window.speechSynthesis.speak(say);
+                }
+              } catch { /* The visible greeting remains available. */ }
+            });
           }
         } else {
           const detail = await invoke("get_worker_diagnostics").catch(() => null);

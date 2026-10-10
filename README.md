@@ -128,3 +128,15 @@ Install the Piper CLI locally and put a genuine .onnx voice model at the path sp
 ## Memory privacy preference
 
 The desktop System panel can enable or disable opt-in persistent memory without editing the bundled TOML file. The choice is atomically stored in the user's private AURIX application directory. Enabling requires successful DPAPI key access on Windows. Disabling prevents further memory retrieval and conversation persistence but leaves previously saved encrypted records untouched; delete them individually through Memory Explorer. No claim of secure deletion from physical storage backups is made.
+
+## October 2026 desktop usability revision (v0.2.0 preview)
+
+- Redesigned the desktop palette, reduced bulky central elements and fixed independently scrolling workspaces and status/chat columns.
+- First-run welcome now displays and attempts to speak an explicit greeting after worker health checks pass. A persistent opt-in wake listener can listen for "Hey Luna" using an installed local Whisper model or the Windows system speech recognizer; on-device microphone compatibility remains to be validated.
+- Low-risk allowlisted applications (e.g. calculator, notepad, WhatsApp) can open and close without the former unnecessary double approval; arbitrary binaries, account messages and destructive actions still require a Windows-native confirmation.
+- Built-in narrow app command parsing works even before installing an Ollama model. In-app model downloading can be enabled without leaving the Models panel.
+- Gmail SMTP app passwords are entered in the Email panel and protected with Windows DPAPI in the current user's private application directory. Secrets are never returned to the UI. Sending remains an explicit review-and-approve operation.
+- Windows system speech output is a fallback when no Piper runtime is installed. Microphone transcription can fall back to installed Windows speech recognition if no Whisper model is configured.
+- Windows builds include optional desktop automation packages such as PyAutoGUI; no Python/Node/Rust developer tooling is required for end users of the installer.
+
+**Verification boundary:** CI unit tests and installer smoke tests are not equivalent to live device trials. Always-on speech, Windows language availability, third-party WhatsApp automation, SMTP delivery, privileged IPC hardening, secure OS process sandboxing, signed updates, clean machine trials, and accessibility audits remain unverified or incomplete. This is an unsigned testing release, not a certified production build.

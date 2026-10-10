@@ -1,20 +1,18 @@
-# AURIX desktop shell
+# AURIX desktop application
 
-React 18 + Vite + Tauri 2 interface for the LUNA agent. The **native** Tauri process owns the session credential used to reach the Python loopback worker. The agent runner loads a user-provided GGUF file lazily without cloud APIs. The browser preview is a UI-only environment; it cannot invoke desktop actions.
+Windows installer preview: https://github.com/KiritoTempest175/AURIX/releases
 
-## Development
+The packaged application includes the Tauri UI, Python worker, and desktop-control Python dependencies. **An end user does not need Python, Node.js, Rust or terminal commands.**
 
+On opening AURIX, the worker should connect and greet you. In **Models**, enable downloads, install Ollama, download an available local model, and activate it. The quick commands **Open WhatsApp**, **Open calculator** and **Open notepad** use safe built-in routing even if no model is installed.
+
+In **Email**, enter a Gmail address and app password. Windows DPAPI protects the stored secret. Message sending is still gated on user review. **System** offers opt-in "Hey Luna" listening and a microphone test. Windows speech recognition and installed voice/language support vary; a dedicated local Whisper installation is optional.
+
+The test preview remains unsigned. Physical mic/speaker, third-party app automation and email delivery have not been fully verified on end-user devices.
+
+Developer-only source setup:
 ```powershell
+cd frontend
 npm install
 npm run tauri dev
 ```
-
-`npm run dev` opens only the browser preview. It does **not** start the worker.
-
-Source-mode development requires Python. The experimental PyInstaller sidecar bundle script lives in `installer/build_windows.ps1`; its unsigned outputs are not yet suitable for general end users.
-
-## Backend boundary
-
-A 256-bit per-session token is created by Rust on startup. It is injected into the worker environment and used by native `invoke` commands; never share it with React. The bridge is loopback-bound and denies browser Origins. Exact pending actions are previewed from the worker; Tauri opens a native Windows confirmation before requesting execution.
-
-The voice button, GPU telemetry, and most navigation panels are incomplete and clearly labeled, not represented as fully operational. See the root README for the audited status.

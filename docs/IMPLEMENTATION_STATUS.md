@@ -66,3 +66,9 @@ Memory capture may now be toggled in System and Memory views with an explicit co
 ### Local-model configuration (inference only)
 
 The model setup is controlled by the desktop Models panel, which calls trusted native Rust commands for `winget` installation, local Ollama model downloads (with progress events), deletion and activation. The Python worker uses the fixed loopback Ollama chat API or the configured GGUF backend. Users choose Qwen3, Gemma3 or any syntactically valid installed Ollama model tag; model weights are never downloaded automatically. Runtime verification on real Windows hardware remains required.
+
+### v0.2.0 desktop usability revision
+
+Implemented in source: independent scrolling, updated desktop style, first-run text and TTS greeting, low-risk no-prompt app allowlist, deterministic known-app routing before model setup, secure DPAPI-backed SMTP credential entry in the Email panel, opt-in persistent wake listener, Windows speech-to-text/speech-output fallbacks, and packaged optional desktop automation Python dependencies.
+
+Remaining for release sign-off: actual microphone and wake test on supported Windows speech environments, Windows installer clean-VM smoke, local GPU/model performance, end-to-end Ollama and WhatsApp UI automation, real SMTP recipient test, automatic update/code signing, stronger native IPC and process sandbox, and independent security/accessibility audit. This status is not a claim of 10/10 production readiness.

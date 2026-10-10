@@ -10,10 +10,15 @@ on:
       - 'frontend/bridge_server.py'
       - 'frontend/src/**'
       - 'pyproject.toml'
+concurrency:
+  group: aurix-windows-preview-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write  # only the installer workflow can publish preview release assets
 jobs:
   bundle:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[publish-preview]') }}
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
@@ -47,7 +52,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $tag = "v0.1.0-preview.${{ github.run_number }}"
+          $version = (Get-Content 'frontend/src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json).version
+          $tag = "v$version-preview.${{ github.run_number }}"
           $installerDir = 'target/release/bundle'
           $assets = @(
             Get-ChildItem -Path "$installerDir/nsis" -Filter '*.exe' -File -ErrorAction SilentlyContinue
@@ -60,13 +66,13 @@ jobs:
           }
           $checksums | Set-Content -Path 'SHA256SUMS.txt' -Encoding utf8
           @'
-          # AURIX v0.1.0 — Windows preview
+          # AURIX 0.2 — Windows desktop preview
 
           Unsigned development build for Windows 10/11 testing, not a production release.
 
           **Install:** Download the .exe (NSIS installer) or .msi from Assets below. You do not need to install both.
 
-          **First run:** AURIX launches a bundled local Python worker. In Models, turn off Offline Mode temporarily to install Ollama and download a local model. All downloads require approval.
+          **First run:** AURIX launches a bundled local Python worker. In Models, choose Enable model downloads to install Ollama and download a local model. All downloads require approval.
 
           **Known limitations:** Windows installer and local model flows are not independently validated on end-user PCs; code signing and updates are not implemented. Native named-pipe IPC, full voice interaction, and sandboxed shell execution remain unfinished.
 
