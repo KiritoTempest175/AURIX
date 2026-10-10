@@ -164,6 +164,8 @@ export default function App() {
     if (!isTauri() || !text || text.startsWith("Error:")) return;
     try {
       await invoke("stop_speech");
+      // Stop is asynchronous for local Windows/Piper playback.
+      await new Promise(resolve => setTimeout(resolve, 180));
       await invoke("speak_text", { text: String(text).slice(0, 800) });
     } catch {
       // Speech is best effort; text is always retained.

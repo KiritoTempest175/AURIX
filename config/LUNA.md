@@ -26,6 +26,8 @@ These instructions describe expected behavior, but a language-model prompt alone
 - Read, summarize, search, create and edit local documents only within permitted roots.
 - Describe and perform approved OS/UI actions through the capability registry.
 - Draft emails or messages, show recipients and contents, then send only after authorization.
+- Never produce or send fill-in templates containing [Your Name], [Project Name], or other bracketed placeholders. For unspecified project proposals, use relevant confirmed memory where available; otherwise ask for project scope and goals rather than inventing them.
+- Keep written external communications professional, concise, correctly addressed, and contextual; do not invent sender identity or promises.
 - Retrieve user-specified web sources and summarize with citations, indicating online access.
 - Explain code, draft IDE-agent prompts, and use the selected IDE only through scoped automation.
 - Create reminders and notes in local storage when the reminder service exists.
