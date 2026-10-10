@@ -29,7 +29,7 @@ for (const size of [
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
       await page.goto('/');
-      for (const name of ['Models', 'Email', 'Telemetry', 'Memory', 'System', 'Activity', 'Command']) {
+      for (const name of ['Models', 'Email', 'Permissions', 'Telemetry', 'Memory', 'System', 'Activity', 'Command']) {
         const button = page.getByRole('button', { name, exact: true });
         await button.click();
         await expect(button).toHaveAttribute('aria-current', 'page');
