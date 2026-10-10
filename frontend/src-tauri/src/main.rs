@@ -7,7 +7,10 @@ use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::Duration;
 use sysinfo::System;
-use tauri::State;
+use tauri::{Emitter, Manager, State};
+
+mod telemetry_store;
+use telemetry_store::{MetricPoint, TelemetryStore};
 
 const BRIDGE_URL: &str = "http://127.0.0.1:9721";
 
@@ -71,12 +74,11 @@ fn check_response(status: reqwest::StatusCode) -> Result<(), String> {
     if status.is_success() { Ok(()) } else { Err(format!("Worker rejected request (HTTP {})", status.as_u16())) }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct Telemetry { cpu: f32, ram: f32, gpu: Option<f32>, gpu_temp: Option<f32>, vram_mb: Option<f32> }
 struct SysState(Mutex<System>);
 
-#[tauri::command]
-fn get_telemetry(state: State<'_, SysState>) -> Telemetry {
+fn sample_telemetry(state: &SysState) -> Telemetry {
     let mut sys = state.0.lock().expect("telemetry mutex poisoned");
     sys.refresh_cpu_usage();
     sys.refresh_memory();
@@ -95,6 +97,26 @@ fn get_telemetry(state: State<'_, SysState>) -> Telemetry {
         Err(_) => (None, None, None),
     };
     Telemetry { cpu: sys.global_cpu_usage(), ram, gpu, gpu_temp, vram_mb }
+}
+
+#[tauri::command]
+fn get_telemetry(state: State<'_, SysState>) -> Telemetry {
+    sample_telemetry(&state)
+}
+
+#[tauri::command]
+fn get_telemetry_history(window: String, state: State<'_, TelemetryStore>) -> Result<Vec<MetricPoint>, String> {
+    state.history(&window)
+}
+
+#[tauri::command]
+fn export_telemetry_csv(
+    window: String,
+    state: State<'_, TelemetryStore>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let directory = app.path().app_data_dir().map_err(|e| e.to_string())?.join("exports");
+    state.export_csv(&window, &directory)
 }
 
 #[derive(Deserialize)]
@@ -254,11 +276,37 @@ fn main() {
         .build().expect("Unable to create local HTTP client");
     tauri::Builder::default()
         .manage(SysState(Mutex::new(System::new_all())))
+        .setup(|app| {
+            let directory = app.path().app_data_dir()?;
+            let store = TelemetryStore::open(&directory).map_err(std::io::Error::other)?;
+            app.manage(store);
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                let snapshot = sample_telemetry(&handle.state::<SysState>());
+                if let Ok(duration) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                    let point = MetricPoint {
+                        timestamp: duration.as_secs() as i64,
+                        cpu: Some(snapshot.cpu as f64),
+                        ram: Some(snapshot.ram as f64),
+                        gpu: snapshot.gpu.map(|x| x as f64),
+                        gpu_temp: snapshot.gpu_temp.map(|x| x as f64),
+                        vram_mb: snapshot.vram_mb.map(|x| x as f64),
+                    };
+                    if let Err(err) = handle.state::<TelemetryStore>().record(&point) {
+                        eprintln!("Telemetry store unavailable: {err}");
+                    }
+                }
+                let _ = handle.emit("aurix://telemetry", &snapshot);
+                std::thread::sleep(Duration::from_secs(3));
+            });
+            Ok(())
+        })
         .manage(BridgeState { token, process: Mutex::new(child), client })
         .invoke_handler(tauri::generate_handler![
             get_telemetry, get_bridge_telemetry, get_bridge_health, send_message, execute_trust,
             get_ui_settings, set_offline_mode, list_memories, add_memory, delete_memory,
-            listen_voice, kill_actions, resume_actions
+            listen_voice, kill_actions, resume_actions,
+            get_telemetry_history, export_telemetry_csv
         ])
         .run(tauri::generate_context!())
         .expect("error while running AURIX");

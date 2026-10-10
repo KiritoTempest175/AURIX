@@ -21,7 +21,7 @@ Updated: 2026-10-10. Status is based on code changes, not an executed Windows pe
 | M-03 | Partially fixed | Reused reqwest client with 120-second timeout; need individual deadlines/cancel support |
 | M-04 | Fixed in source | React `isTauri()`; browser no longer calls private localhost API |
 | M-05 | Mitigated by honest UI | Voice button reports unavailable instead of invented transcript |
-| M-06 | Partially fixed | UI worker health is probed, native Rust telemetry now reads GPU utilization/temperature/VRAM via NVML when supported; full historical health and charts remain |
+| M-06 | Partially fixed | Rust GPU metrics, SQLite raw/minute/hour history, CSV export and live event updates are implemented. GPU-less systems report N/A; full runtime validation and subsystem health checks are pending |
 | M-07 | Open | `config.toml` remains authoritative for tool permissions, but legacy `config/luna.toml` is still referenced |
 | M-08 | Open | Lock files, pip/npm audits and pinned dependency updates still required |
 | M-09 | Partially fixed | New `tests/test_bridge_security.py`; full installer/IPC abuse-case suite missing |

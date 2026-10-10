@@ -7,7 +7,7 @@ AURIX is an **experimental Windows desktop AI assistant**. The application UI is
 ## Implemented in the current repository
 
 - Local desktop chat routed to a Python agent when a supported model and runtime are available.
-- Rust telemetry for CPU/RAM and, on NVIDIA devices with NVML available, GPU utilization, temperature and VRAM. Unsupported GPUs report unavailable, never fabricated zeros. Historical persistence is not yet implemented in the desktop UI.
+- Rust telemetry for CPU/RAM and, when supported, GPU utilization, temperature and VRAM. Raw data persists in an app-local SQLite database for 24 hours, one-minute aggregates for 30 days and hourly aggregates without automatic expiry. A telemetry history chart shows 1h/24h/7d and can export CSV to app data. No per-process GPU ownership is claimed.
 - Desktop application and file tool implementations with action-level permission requests.
 - Single-use, fingerprint-bound pending action tokens, with a Windows native confirmation dialog for requests made through the Tauri UI.
 - Session-secret-authenticated **localhost-only HTTP** between Tauri and the Python worker. Browser-origin requests and arbitrary hosts are rejected; JavaScript does not receive the token.
@@ -22,7 +22,7 @@ AURIX is an **experimental Windows desktop AI assistant**. The application UI is
 - Always-on wake-word detection and interruptible voice playback. Push-to-talk now uses an optional local Whisper model when installed, otherwise reports unavailability.
 - A Windows restricted-token/Job-Object command sandbox; model-generated `shell_exec` is **disabled** until this exists.
 - The active agent router uses lazy, local GGUF inference through optional `llama-cpp-python`. Model weights and the native library are not bundled. Legacy Transformers/Ollama code remains in the repository but is not used by the default router.
-- A verified 6 GB **per-application** VRAM / 12 GB RAM hard cap, GPU history charts, idle <150 MB resource guarantee, and complete evaluated training.
+- A verified 6 GB **per-application** VRAM / 12 GB RAM hard cap, idle <150 MB resource guarantee, and complete evaluated training.
 - Complete role-based tool SDK, rollback/undo, persistent native approval audit, memory explorer, signed installer, and independent security assessment.
 - Online communications and software-installation workflows require explicit review; no guarantee is made that every action is fully offline.
 

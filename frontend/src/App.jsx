@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 // The session credential never enters JavaScript; only native commands can
 // access the authenticated Python worker.
@@ -31,46 +32,60 @@ const STATUS = {
 // Telemetry hook — polls the bridge (or native sysinfo) every 2 seconds
 // ---------------------------------------------------------------------------
 function useTelemetry() {
-  const [stats, setStats] = useState({
-    cpu: null,
-    ram: null,
-    gpu: null,
-    gpu_temp: null,
-  });
+  const [stats, setStats] = useState({ cpu: null, ram: null, gpu: null, gpu_temp: null, vram_mb: null });
 
   useEffect(() => {
+    if (!isTauri()) return;
     let active = true;
-    let pending = false;
-
-    const poll = async () => {
-      if (pending) return;
-      pending = true;
-      try {
-        const data = await apiTelemetry();
-        if (active) {
-          setStats({
-            cpu: data.cpu == null ? null : Math.round(data.cpu),
-            ram: data.ram == null ? null : Math.round(data.ram),
-            gpu: data.gpu == null ? null : Math.round(data.gpu),
-            gpu_temp: data.gpu_temp == null ? null : Math.round(data.gpu_temp),
-          });
-        }
-      } catch {
-        // Service can start after UI; retry on next tick.
-      } finally {
-        pending = false;
-      }
+    let unsubscribe = null;
+    const update = (data) => {
+      if (active) setStats({
+        cpu: data.cpu == null ? null : Math.round(data.cpu),
+        ram: data.ram == null ? null : Math.round(data.ram),
+        gpu: data.gpu == null ? null : Math.round(data.gpu),
+        gpu_temp: data.gpu_temp == null ? null : Math.round(data.gpu_temp),
+        vram_mb: data.vram_mb == null ? null : Math.round(data.vram_mb),
+      });
     };
-
-    poll();
-    const id = setInterval(poll, 3000);
-    return () => {
-      active = false;
-      clearInterval(id);
-    };
+    invoke("get_telemetry").then(update).catch(() => {});
+    listen("aurix://telemetry", (event) => update(event.payload))
+      .then((stop) => { if (active) unsubscribe = stop; else stop(); })
+      .catch(() => {});
+    return () => { active = false; if (unsubscribe) unsubscribe(); };
   }, []);
-
   return stats;
+}
+
+function HistoryChart({ samples, metric }) {
+  const valid = samples.filter((p) => typeof p[metric] === "number" && Number.isFinite(p[metric]));
+  if (!valid.length) return <p>No measured history for this metric yet.</p>;
+  const values = valid.map((p) => p[metric]);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const avg = values.reduce((sum, n) => sum + n, 0) / values.length;
+  const scale = Math.max(0.001, max - min);
+  const polyline = valid.map((p, i) => {
+    const x = valid.length === 1 ? 360 : (i / (valid.length - 1)) * 700 + 10;
+    const y = 184 - ((p[metric] - min) / scale) * 165;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  return (
+    <div className="history-chart">
+      <svg viewBox="0 0 720 220" role="img" aria-label={`Historical ${metric} trend`}>
+        {[20, 60, 100, 140, 180].map((y) =>
+          <line key={y} x1="10" x2="710" y1={y} y2={y} stroke="currentColor" strokeOpacity=".08" />
+        )}
+        <polyline points={polyline} fill="none" stroke="var(--accent)" strokeWidth="3"
+          strokeLinejoin="round" strokeLinecap="round" />
+      </svg>
+      <div className="metric-summary">
+        <span>Min: {min.toFixed(1)}</span>
+        <span>Avg: {avg.toFixed(1)}</span>
+        <span>Max: {max.toFixed(1)}</span>
+      </div>
+      <p>{valid.length} recorded samples</p>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -128,6 +143,10 @@ export default function App() {
   const [memoryText, setMemoryText] = useState("");
   const [memorySearch, setMemorySearch] = useState("");
   const [memoryError, setMemoryError] = useState("");
+  const [historyWindow, setHistoryWindow] = useState("1h");
+  const [historyMetric, setHistoryMetric] = useState("cpu");
+  const [telemetryHistory, setTelemetryHistory] = useState([]);
+  const [exportedPath, setExportedPath] = useState("");
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -159,6 +178,29 @@ export default function App() {
       setMemoryError(String(error));
     }
   }, []);
+
+  useEffect(() => {
+    if (activeView !== "Telemetry" || !isTauri()) return;
+    let active = true;
+    const reload = async () => {
+      try {
+        const points = await invoke("get_telemetry_history", { window: historyWindow });
+        if (active) setTelemetryHistory(points);
+      } catch (error) {
+        if (active) setMemoryError(String(error));
+      }
+    };
+    reload();
+    const id = setInterval(reload, 15000);
+    return () => { active = false; clearInterval(id); };
+  }, [activeView, historyWindow]);
+
+  const exportHistory = async () => {
+    try {
+      const path = await invoke("export_telemetry_csv", { window: historyWindow });
+      setExportedPath(path);
+    } catch (error) { setExportedPath(String(error)); }
+  };
 
   useEffect(() => {
     if (!workerOnline || !isTauri()) return;
@@ -325,7 +367,7 @@ export default function App() {
         </div>
 
         <nav className="nav-list">
-          {["Command", "Memory", "System", "Activity"].map((item) => (
+          {["Command", "Telemetry", "Memory", "System", "Activity"].map((item) => (
             <button key={item} className={`nav-item ${activeView === item ? "is-active" : ""}`} onClick={() => setActiveView(item)} aria-current={activeView === item ? "page" : undefined}>
               <span className="nav-dot" />
               {item}
@@ -406,6 +448,26 @@ export default function App() {
           </>
         ) : (
           <section className="workspace-panel" aria-label={activeView}>
+            {activeView === "Telemetry" && (
+              <>
+                <h2>Telemetry history</h2>
+                <p>Measured native system metrics. Raw samples are retained 24h, minute data 30 days, and hourly aggregates thereafter.</p>
+                <div className="telemetry-controls">
+                  {["1h", "24h", "7d"].map((range) =>
+                    <button key={range} className={range === historyWindow ? "selected-range" : ""}
+                      onClick={() => setHistoryWindow(range)}>{range}</button>
+                  )}
+                  <select value={historyMetric} onChange={(e) => setHistoryMetric(e.target.value)}
+                    aria-label="Chart metric">
+                    {["cpu", "ram", "gpu", "gpu_temp", "vram_mb"].map((m) =>
+                      <option value={m} key={m}>{m}</option>)}
+                  </select>
+                  <button onClick={exportHistory} disabled={!isTauri()}>Export CSV</button>
+                </div>
+                <HistoryChart samples={telemetryHistory} metric={historyMetric} />
+                {exportedPath && <p role="status">CSV export: {exportedPath}</p>}
+              </>
+            )}
             {activeView === "Memory" && (
               <>
                 <h2>Encrypted memory</h2>
@@ -500,6 +562,7 @@ export default function App() {
           <Bar label="CPU" value={telemetry.cpu} />
           <Bar label="RAM" value={telemetry.ram} accent="var(--accent-2)" />
           <Bar label="GPU" value={telemetry.gpu} />
+          <Bar label="VRAM" value={telemetry.vram_mb} unit=" MB" />
           <Bar
             label="GPU temp"
             value={telemetry.gpu_temp}
