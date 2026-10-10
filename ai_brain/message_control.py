@@ -469,18 +469,19 @@ class WhatsAppController:
                 0.25
             )
 
-            pyautogui.write(
-                message,
-                interval=0.02,
-            )
-
-            time.sleep(
-                0.25
-            )
-
-            pyautogui.press(
-                "enter"
-            )
+            self._focus_message_composer()
+            if message.isascii():
+                pyautogui.write(message, interval=0.012)
+            else:
+                import pyperclip
+                previous = pyperclip.paste()
+                try:
+                    pyperclip.copy(message)
+                    pyautogui.hotkey("ctrl", "v")
+                finally:
+                    pyperclip.copy(previous)
+            time.sleep(0.2)
+            pyautogui.press("enter")
 
         except Exception as exc:
 
@@ -821,113 +822,41 @@ class WhatsAppController:
     # READ CHAT HEADER
     # ============================================================
 
-    def _collect_chat_header_texts(
-        self,
-    ) -> list[str]:
-        """Read visible text from right-side chat header only."""
+    def _collect_chat_header_texts(self) -> list[str]:
+        """Read only active-chat toolbar labels (Text or Button roles).
 
-        window = (
-            self._get_whatsapp_window()
-        )
-
-        try:
-
-            window_rect = (
-                window.rectangle()
-            )
-
-            width = max(
-                window_rect.width(),
-                1,
-            )
-
-            height = max(
-                window_rect.height(),
-                1,
-            )
-
-            # Left ~32% contains search/chat list.
-            conversation_left = (
-                window_rect.left
-                + int(
-                    width * 0.32
-                )
-            )
-
-            # Only inspect top header area.
-            header_bottom = (
-                window_rect.top
-                + min(
-                    180,
-                    max(
-                        90,
-                        int(
-                            height * 0.18
-                        ),
-                    ),
-                )
-            )
-
-            texts = []
-
-            for control in window.descendants(
-                control_type="Text"
-            ):
-
+        Dates in the message pane and names in the left-hand contact list
+        must never authorize outbound messages.
+        """
+        window = self._get_whatsapp_window()
+        outer = window.rectangle()
+        left = outer.left + int(max(outer.width(), 1) * 0.35)
+        bottom = outer.top + min(120, max(70, int(max(outer.height(), 1) * .15)))
+        labels = []
+        for kind in ("Text", "Button"):
+            for element in window.descendants(control_type=kind):
                 try:
-
-                    if not control.is_visible():
+                    if not element.is_visible():
                         continue
-
-                    text = str(
-                        control.window_text()
-                        or ""
-                    ).strip()
-
-                    if not text:
+                    rect = element.rectangle()
+                    if rect.left < left or not outer.top + 6 <= rect.top <= bottom:
                         continue
-
-                    rect = (
-                        control.rectangle()
-                    )
-
-                    # Ignore left search/chat list.
-                    if (
-                        rect.left
-                        < conversation_left
-                    ):
+                    value = str(element.window_text() or "").strip()
+                    if not value:
+                        value = str(getattr(element.element_info, "name", "") or "").strip()
+                    if not value or len(value) > 180:
                         continue
-
-                    # Ignore content below header.
-                    if (
-                        rect.top
-                        > header_bottom
-                    ):
+                    if value.casefold() in {
+                        "monday", "tuesday", "wednesday", "thursday",
+                        "friday", "saturday", "sunday", "today", "yesterday",
+                        "search", "video call", "voice call", "menu"
+                    }:
                         continue
-
-                    if (
-                        rect.top
-                        < window_rect.top
-                    ):
-                        continue
-
-                    if text not in texts:
-
-                        texts.append(
-                            text
-                        )
-
+                    if value not in labels:
+                        labels.append(value)
                 except Exception:
                     continue
-
-            return texts
-
-        except Exception as exc:
-
-            raise WhatsAppUIError(
-                "Unable to read selected "
-                f"WhatsApp chat header: {exc}"
-            ) from exc
+        return labels
 
     # ============================================================
     # VERIFY SELECTED CONTACT
@@ -981,7 +910,7 @@ class WhatsAppController:
             matches = [
                 text
                 for text in header_texts
-                if self._contact_names_match(
+                if self._header_matches_contact(
                     requested_contact,
                     text,
                 )
@@ -1025,12 +954,52 @@ class WhatsAppController:
         raise WhatsAppUIError(
             "Selected chat could not be verified "
             f"as '{requested_contact}'. "
-            f"Visible header text: {preview}"
+            f"Accessible toolbar labels: {preview}. "
+            "If the chat is open, maximize WhatsApp Desktop and retry."
         )
 
     # ============================================================
     # ENSURE WHATSAPP RUNNING
     # ============================================================
+
+    @classmethod
+    def _header_matches_contact(cls, expected: str, label: str) -> bool:
+        """Allow exact contact names and UIA profile-button descriptions."""
+        if cls._contact_names_match(expected, label):
+            return True
+        expected_name = cls._normalize_contact_name(expected)
+        label_name = cls._normalize_contact_name(label)
+        return bool(expected_name) and (
+            label_name.startswith(expected_name + ", contact info")
+            or label_name.startswith(expected_name + ", view profile")
+            or label_name.startswith(expected_name + " - contact info")
+        )
+
+    def _focus_message_composer(self) -> None:
+        window = self._get_whatsapp_window()
+        bounds = window.rectangle()
+        bottom = bounds.top + int(max(bounds.height(), 1) * .66)
+        left = bounds.left + int(max(bounds.width(), 1) * .31)
+        inputs = []
+        for kind in ("Edit", "Document"):
+            for element in window.descendants(control_type=kind):
+                try:
+                    if not element.is_visible():
+                        continue
+                    rect = element.rectangle()
+                    if rect.top < bottom or rect.left < left:
+                        continue
+                    label = str(element.window_text() or getattr(element.element_info, "name", "") or "").casefold()
+                    if any(term in label for term in ("message", "type", "compose")):
+                        inputs.append(element)
+                except Exception:
+                    continue
+        if len(inputs) != 1:
+            raise WhatsAppUIError(
+                "Cannot safely identify the WhatsApp message box. "
+                "Open the intended chat and try again."
+            )
+        inputs[0].click_input()
 
     def _ensure_running(
         self,
