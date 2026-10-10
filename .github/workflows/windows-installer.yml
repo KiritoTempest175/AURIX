@@ -9,6 +9,11 @@ on:
       - 'frontend/src-tauri/**'
       - 'frontend/bridge_server.py'
       - 'frontend/src/**'
+      - 'ai_engine/**'
+      - 'ai_brain/**'
+      - 'security/**'
+      - 'native_ui/**'
+      - 'core_engine/**'
       - 'pyproject.toml'
       - 'docs/USER_TEST_CHECKLIST.md'
 concurrency:
