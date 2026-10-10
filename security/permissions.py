@@ -451,9 +451,17 @@ class PermissionManager:
             True,
         )
 
-        # Config cannot disable mandatory protection of dangerous actions.
-        # Users may tune only reversible operations; Tier-3 always prompts.
+        # Neither the user preference panel nor config can bypass high-risk
+        # actions, external messages or unknown executable launches.
         if category in self.HIGH_RISK_CATEGORIES or category == ActionCategory.EXTERNAL_COMMUNICATION:
+            return True
+        from security.permission_preferences import read_policy
+        preferences = read_policy()
+        if category == ActionCategory.APP_CONTROL:
+            return not preferences["allow_known_app_control"]
+        if category == ActionCategory.FILE_READ:
+            return not preferences["allow_local_file_reads"]
+        if category == ActionCategory.FILE_WRITE and not preferences["allow_trusted_workspace_edits"]:
             return True
         if not security_enabled:
             return False

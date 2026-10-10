@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { summarizeMetric } from "./utils/telemetry.mjs";
 import ModelsPanel from "./components/ModelsPanel.jsx";
 import EmailPanel from "./components/EmailPanel.jsx";
+import PermissionsPanel from "./components/PermissionsPanel.jsx";
 
 // The session credential never enters JavaScript; only native commands can
 // access the authenticated Python worker.
@@ -580,7 +581,7 @@ export default function App() {
         </div>
 
         <nav className="nav-list">
-          {["Command", "Models", "Email", "Telemetry", "Memory", "System", "Activity"].map((item) => (
+          {["Command", "Models", "Email", "Permissions", "Telemetry", "Memory", "System", "Activity"].map((item) => (
             <button key={item} className={`nav-item ${activeView === item ? "is-active" : ""}`} onClick={() => setActiveView(item)} aria-current={activeView === item ? "page" : undefined}>
               <span className="nav-dot" />
               {item}
@@ -688,6 +689,7 @@ export default function App() {
             {activeView === "Email" && (
               <EmailPanel workerOnline={workerOnline} offline={settings?.offline ?? true} />
             )}
+            {activeView === "Permissions" && <PermissionsPanel workerOnline={workerOnline} />}
             {activeView === "Telemetry" && (
               <>
                 <h2>Telemetry history</h2>

@@ -547,6 +547,18 @@ async fn remove_email_configuration(state: State<'_, BridgeState>) -> Result<ser
 }
 
 #[tauri::command]
+async fn get_permission_preferences(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    local_get(&state, "/permissions").await
+}
+
+#[tauri::command]
+async fn set_permission_preferences(
+    values: serde_json::Value, state: State<'_, BridgeState>
+) -> Result<serde_json::Value, String> {
+    local_post(&state, "/permissions", values).await
+}
+
+#[tauri::command]
 async fn get_ui_settings(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
     local_get(&state, "/settings").await
 }
@@ -677,6 +689,7 @@ fn main() {
             get_telemetry, get_bridge_telemetry, get_bridge_health, get_worker_diagnostics,
             restart_ai_worker, send_message, execute_trust,
             get_ui_settings, set_offline_mode, set_memory_enabled,
+            get_permission_preferences, set_permission_preferences,
             email_configuration, save_email_configuration, remove_email_configuration, list_memories, add_memory, delete_memory,
             listen_voice, get_wake_status, set_wake_enabled, speak_text, stop_speech,
             kill_actions, resume_actions, list_activity, reject_trust,

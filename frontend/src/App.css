@@ -1039,3 +1039,7 @@ body { background: var(--bg); color: var(--text); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; }
 }
+
+.permission-guardrails { border:1px solid rgba(105,180,192,.3); border-radius:12px; padding:18px; margin-top:22px; background:rgba(65,185,182,.06); }
+.permission-guardrails strong {color:var(--accent);}
+.permission-guardrails p {line-height:1.6;}

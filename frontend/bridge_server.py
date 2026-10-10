@@ -192,6 +192,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
         if self.path == "/email/configure":
             from ai_brain.email_control import EmailController
             return self._json(EmailController().credentials_status())
+        if self.path == "/permissions":
+            from security.permission_preferences import read_policy
+            return self._json(read_policy())
         if self.path == "/settings":
             from security.action_control import offline_mode, action_is_stopped
             from ai_brain.secure_memory import memory_enabled
@@ -241,6 +244,14 @@ class BridgeHandler(BaseHTTPRequestHandler):
             from security.action_control import resume_actions
             resume_actions()
             return self._json({"stopped": False})
+        if self.path == "/permissions":
+            from security.permission_preferences import write_policy
+            try:
+                return self._json(write_policy(data))
+            except ValueError:
+                return self._json({"error": "INVALID_PERMISSION_POLICY"}, 400)
+            except OSError:
+                return self._json({"error": "PERMISSIONS_SAVE_FAILED"}, 503)
         if self.path == "/models/activate":
             from ai_engine.inference.ollama_runtime import (
                 set_selection, selection,
