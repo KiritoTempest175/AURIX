@@ -117,3 +117,7 @@ LUNA can inspect Git status, commit files that the user has **already staged**, 
 ## Quality and dependency checks
 
 Windows CI now runs Python byte-compilation, pytest, Rust compilation and tests, frontend compilation, and Vitest telemetry unit tests. A separate scheduled/manual security workflow scans Git history for secrets and checks Python, npm, and Cargo advisories. Dependency scanning may identify legacy vulnerabilities; alerts must be resolved before any release. Dependabot opens update PRs for review. End-to-end Windows installer testing, native security review, coverage thresholds, and full lint normalization remain pending.
+
+## Offline Piper speech (optional)
+
+Install the Piper CLI locally and put a genuine .onnx voice model at the path specified by the audio.piper_model_path setting. The chat panel offers Speak last reply and Stop speech. Text is passed to Piper through standard input with no shell expansion. Local Windows playback is attempted only when synthesis succeeds. Missing dependencies and missing model files produce explicit error messages. Model weights are not downloaded automatically. Streaming TTS, barge-in detection, and a continuously listening wake-word workflow remain unimplemented.

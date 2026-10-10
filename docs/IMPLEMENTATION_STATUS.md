@@ -54,3 +54,7 @@ No remaining item above should be advertised as production-ready.
 ### CI improvements
 
 The main pipeline now includes frontend Vitest telemetry tests and Python syntax compilation. A scheduled/manual security workflow includes Gitleaks, pip-audit, npm audit and cargo-audit; Dependabot configurations exist. CI is still being actively stabilized and the release workflow has not passed a clean Windows installer smoke test.
+
+### Local text-to-speech (partial)
+
+The Windows-only Piper adapter in native_ui/audio/offline_tts.py synthesizes bounded, user-requested text from a locally installed voice model and Piper binary. A separate stop command cancels playback. This is not continuous wake-word processing, streaming responses, or automatic spoken greetings. Actual Windows/audio hardware validation is still necessary.

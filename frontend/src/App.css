@@ -821,3 +821,12 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .history-chart svg { display:block; width:100%; height:auto; max-height:250px; color:var(--text-dim); }
 .metric-summary { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; font-family:var(--mono); font-size:12px; }
 .history-chart p { font-size:12px; }
+
+/* Explicitly requested, locally synthesized speech controls */
+.speech-controls { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; flex-wrap: wrap; }
+.speech-controls button {
+  background: var(--panel-solid); border: 1px solid var(--border);
+  color: var(--text); border-radius: 7px; padding: 7px 9px; cursor: pointer; font-size: 11px;
+}
+.speech-controls button:hover:not(:disabled) { border-color: var(--accent); }
+.speech-status { color: var(--text-dim); font-size: 11px; padding: 5px 0 8px; }

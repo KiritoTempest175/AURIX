@@ -148,6 +148,7 @@ export default function App() {
   const [exportedPath, setExportedPath] = useState("");
   const [auditEvents, setAuditEvents] = useState([]);
   const [auditVerified, setAuditVerified] = useState(null);
+  const [speechStatus, setSpeechStatus] = useState("");
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -359,6 +360,28 @@ export default function App() {
   };
 
   const current = STATUS[status];
+  const lastAssistantReply = [...messages].reverse().find((item) => item.from === "aurix")?.text ?? "";
+
+  const speakLastReply = async () => {
+    if (!isTauri() || !lastAssistantReply) return;
+    setSpeechStatus("Requesting local speech synthesis…");
+    try {
+      await invoke("speak_text", { text: lastAssistantReply.slice(0, 800) });
+      setSpeechStatus("Local speech requested. Use Stop speech to interrupt playback.");
+    } catch (error) {
+      setSpeechStatus(`Speech unavailable: ${String(error)}`);
+    }
+  };
+
+  const stopSpeech = async () => {
+    if (!isTauri()) return;
+    try {
+      await invoke("stop_speech");
+      setSpeechStatus("Speech stop requested.");
+    } catch (error) {
+      setSpeechStatus(`Cannot stop speech: ${String(error)}`);
+    }
+  };
 
   return (
     <div className="shell">
@@ -598,6 +621,11 @@ export default function App() {
 
         <section className="panel panel-chat">
           <h3 className="panel-title">Chat</h3>
+          <div className="speech-controls" role="group" aria-label="Local Piper voice controls">
+            <button type="button" onClick={speakLastReply} disabled={!workerOnline || !lastAssistantReply}>Speak last reply</button>
+            <button type="button" onClick={stopSpeech} disabled={!workerOnline}>Stop speech</button>
+          </div>
+          {speechStatus && <div className="speech-status" role="status">{speechStatus}</div>}
           <div className="chat-log" ref={logRef} role="log" aria-live="polite" aria-label="LUNA conversation">
             {messages.map((m, i) => (
               <div key={i} className={`chat-msg chat-${m.from}`}>

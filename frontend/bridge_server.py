@@ -214,6 +214,26 @@ class BridgeHandler(BaseHTTPRequestHandler):
             except Exception:
                 LOG.exception("Memory operation failed")
                 return self._json({"error": "MEMORY_UNAVAILABLE"}, 503)
+        if self.path == "/voice/speak":
+            try:
+                from native_ui.audio.offline_tts import speak_async
+                content = data.get("text")
+                if not isinstance(content, str) or not 1 <= len(content.strip()) <= 800:
+                    return self._json({"error": "INVALID_SPEECH"}, 400)
+                speak_async(content.strip())
+                return self._json({"queued": True})
+            except RuntimeError as exc:
+                error = str(exc)
+                if not error.startswith("TTS_"):
+                    error = "TTS_UNAVAILABLE"
+                return self._json({"error": error}, 503)
+            except Exception:
+                LOG.exception("Local TTS failed to start")
+                return self._json({"error": "TTS_UNAVAILABLE"}, 503)
+        if self.path == "/voice/stop":
+            from native_ui.audio.offline_tts import stop
+            stop()
+            return self._json({"stopped": True})
         if self.path == "/voice/transcribe":
             try:
                 from native_ui.audio.offline_voice import transcribe_microphone

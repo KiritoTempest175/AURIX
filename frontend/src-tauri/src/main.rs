@@ -287,6 +287,19 @@ async fn reject_trust(payload: TrustRequest, state: State<'_, BridgeState>) -> R
 }
 
 #[tauri::command]
+async fn speak_text(text: String, state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    if text.is_empty() || text.chars().count() > 800 {
+        return Err("Speech must have 1–800 characters".to_string());
+    }
+    local_post(&state, "/voice/speak", serde_json::json!({"text": text})).await
+}
+
+#[tauri::command]
+async fn stop_speech(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    local_post(&state, "/voice/stop", serde_json::json!({})).await
+}
+
+#[tauri::command]
 async fn kill_actions(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
     local_post(&state, "/kill", serde_json::json!({})).await
 }
@@ -333,7 +346,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_telemetry, get_bridge_telemetry, get_bridge_health, send_message, execute_trust,
             get_ui_settings, set_offline_mode, list_memories, add_memory, delete_memory,
-            listen_voice, kill_actions, resume_actions, list_activity, reject_trust,
+            listen_voice, speak_text, stop_speech,
+            kill_actions, resume_actions, list_activity, reject_trust,
             get_telemetry_history, export_telemetry_csv
         ])
         .run(tauri::generate_context!())
