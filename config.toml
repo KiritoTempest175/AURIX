@@ -70,9 +70,9 @@ log_file = "logs/aurix_session.log"
 
 
 [llm]
-# Ollama is optional and is installed ONLY at user request.
+# Owned in-process llama.cpp runtime; no external model service.
 # Inference-only: no fine-tuning or background QLoRA training.
-backend = "ollama"
+backend = "llama_cpp"
 ollama_model = "qwen3:4b"
 # Advanced alternative: local GGUF model, shipped separately by the user.
 model_path = "models/gemma-3n-E4B-it-Q4_K_M.gguf"

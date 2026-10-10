@@ -127,7 +127,7 @@ def test_wake_phrases(dispatcher):
 
 
 def test_media_controls(dispatcher):
-    with patch("os.startfile", return_value=None):
+    with patch("os.startfile", return_value=None, create=True):
 
         # Pause / toggle
         reply, handled = dispatcher.dispatch("pause music")
@@ -218,7 +218,7 @@ def test_file_controls(dispatcher):
 
 
 def test_email_controls(dispatcher):
-    with patch("os.startfile", return_value=None):
+    with patch("os.startfile", return_value=None, create=True):
 
         reply, handled = dispatcher.dispatch(
             "draft email to test@example.com | Hello | How are you"
@@ -232,7 +232,7 @@ def test_email_controls(dispatcher):
 
 
 def test_app_controls(dispatcher):
-    with patch("os.startfile", return_value=None):
+    with patch("os.startfile", return_value=None, create=True):
 
         # Launch Notepad
         reply, handled = dispatcher.dispatch(

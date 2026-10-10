@@ -6,7 +6,7 @@ import logging
 from typing import Optional, Tuple
 
 from ai_brain.tool_executor import ToolExecutor
-from ai_engine.inference.ollama_runtime import get_model_runner
+from ai_engine.inference.local_gguf import get_default_local_runner as get_model_runner
 
 logger = logging.getLogger(
     "aurix.ai_brain.agent_router"
@@ -155,7 +155,7 @@ class AgentRouter:
             action = "close" if verb in {"close", "exit"} else "open"
             if self.executor._safe_desktop_app(name, action):
                 tool = "close_app" if action == "close" else "open_app"
-                return self.executor.execute(tool, {"target": name}), True
+                return self.executor.execute(tool, {"target": name.lower()}), True
 
         # --------------------------------------------------------
         # STEP 1:

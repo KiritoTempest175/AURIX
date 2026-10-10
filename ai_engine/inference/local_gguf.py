@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import secrets
 import re
 import threading
 import time
@@ -27,7 +29,15 @@ ALLOWED_TOOLS = {
 
 
 def _config() -> dict:
-    return load_config().get("llm", {})
+    cfg = dict(load_config().get("llm", {}))
+    try:
+        saved = json.loads((user_data_root() / "gguf-selection.json").read_text(encoding="utf-8"))
+        name = saved["filename"]
+        if isinstance(name, str) and Path(name).name == name and name.lower().endswith(".gguf"):
+            cfg["model_path"] = str(user_data_root() / "models" / name)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return cfg
 
 
 def _local_path(raw: object) -> Optional[Path]:
@@ -137,17 +147,22 @@ class LocalGGUFRunner:
         return self._model
 
     def unload_if_idle(self) -> bool:
-        with self._lock:
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
             if self._model is None:
                 return False
             if time.monotonic() - self._last_used < self.unload_after:
                 return False
-            self._model = None
-            self._history.clear()
+            model, self._model = self._model, None
+            if hasattr(model, "close"):
+                model.close()
             import gc
             gc.collect()
             LOG.info("Released idle local GGUF model")
             return True
+        finally:
+            self._lock.release()
 
     @staticmethod
     def _persona() -> str:
@@ -245,10 +260,56 @@ class LocalGGUFRunner:
 
 
 _default_runner: Optional[LocalGGUFRunner] = None
+_default_lock = threading.Lock()
+
+
+def reap_idle_runner() -> bool:
+    runner = _default_runner
+    return runner.unload_if_idle() if runner is not None else False
 
 
 def get_default_local_runner() -> LocalGGUFRunner:
     global _default_runner
-    if _default_runner is None:
-        _default_runner = LocalGGUFRunner()
-    return _default_runner
+    with _default_lock:
+        if _default_runner is None:
+            _default_runner = LocalGGUFRunner()
+        return _default_runner
+
+
+def model_status() -> dict:
+    import importlib.util
+    runner = get_default_local_runner()
+    engine = importlib.util.find_spec("llama_cpp") is not None
+    path = runner.model_path or runner.fallback_model_path
+    return {
+        "backend": "llama_cpp", "selected": path.name if path else "",
+        "model_ready": runner.has_weights and engine,
+        "engine_available": engine, "model_loaded": runner._model is not None,
+        "installed": [path.name] if path else [], "recommendations": [],
+    }
+
+
+def import_model(source: str, sha256: str) -> dict:
+    """Import verified bytes, then atomically select them for the next request."""
+    global _default_runner
+    from scripts.import_model import verify_and_import
+    settings = user_data_root() / "gguf-selection.json"
+    temporary = settings.with_name("." + secrets.token_hex(16) + ".tmp")
+    with _default_lock:
+        if _default_runner is not None:
+            with _default_runner._lock:
+                model = _default_runner._model
+                if model is not None and hasattr(model, "close"):
+                    model.close()
+                _default_runner._model = None
+        path = verify_and_import(Path(source), sha256)
+        try:
+            with temporary.open("x", encoding="utf-8") as out:
+                json.dump({"filename": path.name, "sha256": sha256.lower()}, out)
+                out.flush()
+                os.fsync(out.fileno())
+            os.replace(temporary, settings)
+        finally:
+            temporary.unlink(missing_ok=True)
+        _default_runner = None
+    return model_status()

@@ -688,7 +688,7 @@ class ToolExecutor:
         args = args or {}
 
         # Enforce the emergency stop and offline policy BEFORE any tool routing.
-        from security.action_control import action_is_stopped, network_allowed
+        from security.action_control import action_is_stopped, network_allowed, action_generation
         if action_is_stopped():
             return "ACTION_STOPPED: Emergency block is engaged."
         if not network_allowed(tool_name):
@@ -717,12 +717,21 @@ class ToolExecutor:
         if validation_error:
 
             logger.warning(
-                "Rejected malformed tool call: tool=%s reason=%s",
+                "Rejected malformed tool call: tool=%s",
                 tool_name,
-                validation_error,
             )
 
             return validation_error
+
+        # Native MessageBox text is NUL-terminated and has no scrollable diff.
+        # Reject deceptive controls and overlong previews instead of showing a
+        # truncated approval for an action that contains additional arguments.
+        for value in args.values():
+            if isinstance(value, str) and any(
+                ord(c) < 32 and c not in "\n\r\t" or c in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
+                for c in value
+            ):
+                return "INVALID_ARGUMENT: Unsupported control character."
 
         category = self._get_category(
             tool_name,
@@ -779,6 +788,9 @@ class ToolExecutor:
 
         if needs_permission:
 
+            if len(self._describe_action(tool_name, args)) > 4000:
+                return "PREVIEW_TOO_LARGE: Action requires a smaller complete preview."
+
             self._cleanup_expired_pending()
 
             if token_id is None:
@@ -794,6 +806,7 @@ class ToolExecutor:
                 self._pending_actions[
                     request_id
                 ] = {
+                    "generation": action_generation(),
                     "tool":
                         tool_name,
 
@@ -883,7 +896,7 @@ class ToolExecutor:
             self._audit_event(tool_name, request_fingerprint, "FAILED")
 
             return (
-                f"Tool execution failed: {exc}"
+                "TOOL_FAILED: The action could not complete. Check local diagnostics."
             )
 
     # ============================================================
@@ -973,6 +986,10 @@ class ToolExecutor:
                 request_id
             )
         )
+        from security.action_control import action_generation
+        if pending.get("generation") != action_generation():
+            self._audit_event(pending["tool"], pending["fingerprint"], "BLOCKED")
+            return "ACTION_STOPPED: Approval invalidated by emergency stop. Request the action again."
 
         current_fingerprint = (
             self._action_fingerprint(
@@ -1252,6 +1269,16 @@ class ToolExecutor:
     # ============================================================
 
     def _describe_action(
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+    ) -> str:
+        summary = self._action_summary(tool_name, args)
+        return summary + "\n\nExact arguments:\n" + json.dumps(
+            args, ensure_ascii=True, sort_keys=True, indent=2
+        )
+
+    def _action_summary(
         self,
         tool_name: str,
         args: Dict[str, Any],

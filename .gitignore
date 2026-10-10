@@ -1,7 +1,6 @@
 # Rust Build & Target Outputs
 target/
 **/*.rs.bk
-Cargo.lock
 
 # Python Virtual Environments
 .venv/
@@ -89,7 +88,6 @@ frontend/node_modules/
 frontend/dist/
 frontend/src-tauri/target/
 frontend/src-tauri/gen/
-frontend/package-lock.json
 
 
 # User-owned memory (never commit personal data)

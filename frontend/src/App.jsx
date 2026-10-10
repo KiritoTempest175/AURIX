@@ -132,7 +132,7 @@ export default function App() {
   const telemetry = useTelemetry();
   const [status, setStatus] = useState("standby");
   const [messages, setMessages] = useState([
-    { from: "aurix", text: "LUNA ready. Choose a local model under Models to begin. Ollama and GGUF are supported." },
+    { from: "aurix", text: "LUNA ready. Choose a local model under Models to begin. Import a verified GGUF file for embedded inference." },
   ]);
   const [draft, setDraft] = useState("");
   const logRef = useRef(null);
@@ -215,9 +215,7 @@ export default function App() {
     let active = true;
     invoke("list_model_choices").then((models) => {
       if (!active) return;
-      if (models.backend === "ollama" &&
-          (!Array.isArray(models.installed) ||
-           !models.installed.includes(models.selected))) {
+      if (!models.model_ready) {
         setActiveView((current) => current === "Command" ? "Models" : current);
       }
     }).catch(() => {});
@@ -742,7 +740,7 @@ export default function App() {
                   </div>
                   <button type="button" onClick={handleMicPress} disabled={!workerOnline || status !== "standby"}>Test microphone</button>
                 </div>
-                <p>Worker: {workerOnline ? "Connected" : "Disconnected"}. Ollama model installation and selection are managed in the Models panel.</p>
+                <p>Worker: {workerOnline ? "Connected" : "Disconnected"}. Local GGUF model import is managed in the Models panel.</p>
                 <div className="setting-line">
                   <div><strong>Offline mode</strong><p>Blocks the agent's network-capable tools while enabled.</p></div>
                   <button onClick={updateOffline} disabled={!workerOnline || !settings}>

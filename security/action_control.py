@@ -9,6 +9,7 @@ from pathlib import Path
 
 _LOCK = threading.RLock()
 _STOP = False
+_GENERATION = 0
 _OFFLINE = None
 _NETWORK_TOOLS = frozenset({
     "web_search", "youtube", "send_email",
@@ -53,9 +54,18 @@ def action_is_stopped() -> bool:
 
 
 def stop_actions() -> None:
-    global _STOP
+    global _STOP, _GENERATION
     with _LOCK:
         _STOP = True
+        _GENERATION += 1
+    from native_ui.audio.offline_tts import stop
+    stop()
+
+
+def action_generation() -> int:
+    """Invalidate pre-stop approvals even after the user resumes actions."""
+    with _LOCK:
+        return _GENERATION
 
 
 def resume_actions() -> None:

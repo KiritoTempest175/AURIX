@@ -13,6 +13,7 @@ import os
 import secrets
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -39,11 +40,6 @@ def dispatcher():
 
 
 def telemetry() -> dict:
-    # Release an idle GGUF model without loading it merely to serve telemetry.
-    if _dispatcher is not None:
-        runner = getattr(_dispatcher.router, "_runner", None)
-        if runner is not None and hasattr(runner, "unload_if_idle"):
-            runner.unload_if_idle()
     try:
         import psutil
         return {
@@ -63,6 +59,19 @@ class SecureServer(ThreadingHTTPServer):
         super().__init__(address, handler)
         self.token = token
         self.limit = threading.BoundedSemaphore(8)
+        self._rate_lock = threading.Lock()
+        self._tokens = 60.0
+        self._refill = time.monotonic()
+
+    def admit(self) -> bool:
+        with self._rate_lock:
+            now = time.monotonic()
+            self._tokens = min(60.0, self._tokens + (now - self._refill) * 10)
+            self._refill = now
+            if self._tokens < 1:
+                return False
+            self._tokens -= 1
+            return True
 
     def process_request(self, request, client_address):
         if not self.limit.acquire(blocking=False):
@@ -83,6 +92,12 @@ class SecureServer(ThreadingHTTPServer):
 
 class BridgeHandler(BaseHTTPRequestHandler):
     server: SecureServer
+
+    def setup(self):
+        super().setup()
+        # Bound idle/header/body reads so eight stalled sockets cannot exhaust
+        # all request workers indefinitely.
+        self.connection.settimeout(5)
 
     def _json(self, value: dict, status: int = 200):
         raw = json.dumps(value, ensure_ascii=False).encode("utf-8")
@@ -109,6 +124,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
         )
 
     def _body(self) -> dict:
+        if self.headers.get("Transfer-Encoding") is not None:
+            raise ValueError("TRANSFER_ENCODING_UNSUPPORTED")
         size = self.headers.get("Content-Length")
         if size is None or not size.isdecimal():
             raise ValueError("CONTENT_LENGTH_REQUIRED")
@@ -130,7 +147,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             return self._json({"error": "UNAUTHORIZED"}, 401)
         if self.path == "/health":
             try:
-                from ai_engine.inference.ollama_runtime import get_model_runner
+                from ai_engine.inference.local_gguf import get_default_local_runner as get_model_runner
                 runner = get_model_runner()
                 return self._json({
                     "status": "ok", "model_ready": runner.is_available,
@@ -142,23 +159,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
         if self.path == "/telemetry":
             return self._json(telemetry())
         if self.path == "/models":
-            from ai_engine.inference.ollama_runtime import (
-                RECOMMENDED_MODELS, selection, installed_models,
-            )
-            chosen = selection()
-            try:
-                installed = installed_models()
-                connected = True
-            except (OSError, ValueError, RuntimeError):
-                installed = []
-                connected = False
-            return self._json({
-                "backend": chosen["backend"],
-                "selected": chosen["model"],
-                "ollama_connected": connected,
-                "installed": installed,
-                "recommendations": RECOMMENDED_MODELS,
-            })
+            from ai_engine.inference.local_gguf import model_status
+            return self._json(model_status())
         if self.path == "/voice/wake":
             from native_ui.audio.wake_service import status, drain_events
             return self._json({**status(), "events": drain_events()})
@@ -196,6 +198,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._authorized():
             return self._json({"error": "UNAUTHORIZED"}, 401)
+        # Emergency controls must remain reachable during a request flood.
+        if self.path not in {"/kill", "/voice/stop"} and not self.server.admit():
+            return self._json({"error": "RATE_LIMITED"}, 429)
         try:
             data = self._body()
         except OverflowError:
@@ -211,23 +216,18 @@ class BridgeHandler(BaseHTTPRequestHandler):
             from security.action_control import resume_actions
             resume_actions()
             return self._json({"stopped": False})
-        if self.path == "/models/activate":
-            from ai_engine.inference.ollama_runtime import (
-                set_selection, selection,
-            )
-            backend, model = data.get("backend"), data.get("model")
+        if self.path == "/models/import":
+            if set(data) != {"path", "sha256"} or not all(isinstance(v, str) for v in data.values()):
+                return self._json({"error": "INVALID_MODEL_REQUEST"}, 400)
+            if not _execute_lock.acquire(blocking=False):
+                return self._json({"error": "WORKER_BUSY"}, 409)
             try:
-                if not isinstance(backend, str) or not isinstance(model, str):
-                    return self._json({"error": "INVALID_MODEL"}, 400)
-                result = set_selection(backend, model)
-                return self._json(result)
-            except ValueError as exc:
-                code = str(exc)
-                if code not in {"INVALID_BACKEND", "INVALID_MODEL", "MODEL_NOT_INSTALLED"}:
-                    code = "INVALID_MODEL"
-                return self._json({"error": code}, 400)
-            except (OSError, TimeoutError):
-                return self._json({"error": "OLLAMA_UNAVAILABLE"}, 503)
+                from ai_engine.inference.local_gguf import import_model
+                return self._json(import_model(data["path"], data["sha256"]))
+            except (ValueError, OSError):
+                return self._json({"error": "MODEL_IMPORT_FAILED"}, 400)
+            finally:
+                _execute_lock.release()
         if self.path == "/voice/wake":
             from native_ui.audio.wake_service import configure
             if set(data) != {"enabled"} or type(data["enabled"]) is not bool:
@@ -319,7 +319,11 @@ class BridgeHandler(BaseHTTPRequestHandler):
         if self.path not in ("/dispatch", "/trust_preview", "/execute_trust", "/reject_trust"):
             return self._json({"error": "NOT_FOUND"}, 404)
 
-        with _execute_lock:
+        # Never queue physical actions behind slow inference. A timed-out
+        # caller must not discover that its queued command ran minutes later.
+        if not _execute_lock.acquire(blocking=False):
+            return self._json({"error": "WORKER_BUSY"}, 409)
+        try:
             try:
                 brain = dispatcher()
                 if self.path == "/dispatch":
@@ -340,6 +344,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
             except Exception:
                 LOG.exception("Worker operation failed")
                 return self._json({"error": "WORKER_FAILURE"}, 500)
+        finally:
+            _execute_lock.release()
 
     def log_message(self, fmt, *args):
         LOG.debug(fmt, *args)
@@ -362,20 +368,22 @@ def main():
     LOG.info("Starting AURIX Python bridge")
     if getattr(sys, "frozen", False):
         install_user_config()
-    token = os.environ.get("AURIX_BRIDGE_TOKEN", "")
+    # Child applications must not inherit the private bridge credential.
+    token = os.environ.pop("AURIX_BRIDGE_TOKEN", "")
     if len(token) < 40:
         raise SystemExit("Bridge requires a Tauri-generated session secret")
     server = SecureServer(("127.0.0.1", 9721), BridgeHandler, token)
     LOG.info("Private bridge running on 127.0.0.1 (authenticated)")
     def reap_idle_model():
         while not stop_reaper.wait(10.0):
-            if _dispatcher is not None:
-                runner = getattr(_dispatcher.router, "_runner", None)
-                if runner is not None and hasattr(runner, "unload_if_idle"):
-                    try:
-                        runner.unload_if_idle()
-                    except Exception:
-                        LOG.exception("Could not release idle model")
+            # AgentRouter resolves the singleton dynamically; _runner is only
+            # populated by injected test runners, so inspecting it missed real
+            # GGUF sessions. Do not create/load a model to run this check.
+            from ai_engine.inference.local_gguf import reap_idle_runner
+            try:
+                reap_idle_runner()
+            except Exception:
+                LOG.exception("Could not release idle model")
     stop_reaper = threading.Event()
     reaper = threading.Thread(target=reap_idle_model, name="model-unloader", daemon=True)
     reaper.start()

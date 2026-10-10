@@ -64,11 +64,17 @@ def _ensure_loaded() -> None:
 def _listen() -> None:
     global _FAILURE, _ARMED_UNTIL
     from native_ui.audio.offline_voice import transcribe_microphone
+    from native_ui.audio.offline_tts import is_speaking
     while not _STOP.is_set():
         try:
+            if is_speaking():
+                _STOP.wait(.2)
+                continue
             heard = transcribe_microphone()
             if _STOP.is_set():
                 break
+            if is_speaking():
+                continue
             match = _WAKE.search(heard)
             if match:
                 command = heard[match.end():].strip(" ,.!?")[:500]
@@ -118,6 +124,7 @@ def configure(enabled: bool) -> dict:
         else:
             _STOP.set()
             _ARMED_UNTIL = 0
+            _EVENTS.clear()
         return status()
 
 

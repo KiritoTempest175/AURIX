@@ -53,7 +53,7 @@ jobs:
           npm --version
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm install
+        run: npm ci
       - name: Compile frontend
         working-directory: frontend
         run: npm run build

@@ -58,6 +58,10 @@ class BrainDispatcher:
         lower = clean.lower().rstrip(
             ".,!?"
         )
+        if lower in {"luna stop", "hey luna stop", "aurix stop", "stop all actions"}:
+            from security.action_control import stop_actions
+            stop_actions()
+            return "New actions blocked and speech stop requested.", True
 
         # Wake phrases are deterministic because
         # calling an LLM here would be unnecessary.

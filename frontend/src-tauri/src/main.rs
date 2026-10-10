@@ -111,6 +111,7 @@ fn launch_worker(token: &str) -> Result<Child, String> {
     if app_dir.join("aurix-worker.exe").is_file() {
         return spawn_bundled_worker(token);
     }
+    #[cfg(debug_assertions)]
     if let Some(root) = discover_root() {
         return spawn_bridge(&root, token);
     }
@@ -342,146 +343,22 @@ async fn local_post(
     res.json().await.map_err(|_| "Invalid private worker response".to_string())
 }
 
-// The renderer cannot choose arbitrary addresses; Ollama is always a local
-// installed service. All downloads and installations require a user gesture.
-fn valid_ollama_model(name: &str) -> bool {
-    !name.is_empty() && name.len() <= 120 && !name.contains("..")
-        && !name.contains("://")
-        && !name.to_ascii_lowercase().ends_with("-cloud")
-        && name.bytes().enumerate().all(|(i, byte)| {
-            byte.is_ascii_alphanumeric() || (i > 0 &&
-                matches!(byte, b'-' | b'_' | b'.' | b'/' | b':'))
-        })
-}
-
-async fn require_online(state: &BridgeState) -> Result<(), String> {
-    let settings = local_get(state, "/settings").await?;
-    if settings.get("offline").and_then(|x| x.as_bool()).unwrap_or(true) {
-        Err("Offline mode is enabled. Turn it off in System settings to download.".into())
-    } else {
-        Ok(())
-    }
-}
-
 #[tauri::command]
 async fn list_model_choices(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
     local_get(&state, "/models").await
 }
 
 #[tauri::command]
-async fn activate_model(
-    backend: String, model: String, state: State<'_, BridgeState>
-) -> Result<serde_json::Value, String> {
-    if !matches!(backend.as_str(), "ollama" | "llama_cpp") || !valid_ollama_model(&model) {
-        return Err("Invalid backend or model tag".into());
+async fn import_local_model(path: String, sha256: String, state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    if path.is_empty() || path.len() > 4096 || path.chars().any(|c| c.is_control())
+        || sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("Provide a local GGUF path and the publisher's SHA-256 checksum".into());
     }
-    local_post(&state, "/models/activate", serde_json::json!({
-        "backend": backend, "model": model
-    })).await
-}
-
-#[tauri::command]
-async fn install_ollama(state: State<'_, BridgeState>) -> Result<String, String> {
-    require_online(&state).await?;
-    let accepted = tokio::task::spawn_blocking(|| native_approve(
-        "Install Ollama using the official winget package Ollama.Ollama?\nThis downloads software from the internet."
-    )).await.map_err(|_| "Installer approval failed".to_string())?;
-    if !accepted { return Err("Installation cancelled by user".into()); }
-
-    #[cfg(target_os = "windows")]
-    {
-        let mut command = tokio::process::Command::new("winget");
-        command.args([
-            "install", "--id", "Ollama.Ollama", "--exact", "--source", "winget",
-            "--silent", "--accept-package-agreements", "--accept-source-agreements",
-            "--disable-interactivity",
-        ]).kill_on_drop(true)
-          .stdout(std::process::Stdio::null())
-          .stderr(std::process::Stdio::null());
-        let status = tokio::time::timeout(
-            Duration::from_secs(1800), command.status()
-        ).await.map_err(|_| "Ollama installation timed out".to_string())?
-            .map_err(|_| "winget unavailable. Install Ollama from https://ollama.com/download/windows".to_string())?;
-        if !status.success() {
-            return Err(format!(
-                "winget install failed (exit {:?}). Check Windows App Installer or https://ollama.com/download/windows",
-                status.code()
-            ));
-        }
-        return Ok("Ollama installed. Launch Ollama if its local service is not yet running.".into());
-    }
-    #[cfg(not(target_os = "windows"))]
-    Err("In-app Ollama installation is supported on Windows only".into())
-}
-
-#[tauri::command]
-async fn pull_ollama_model(
-    model: String, app: tauri::AppHandle, state: State<'_, BridgeState>
-) -> Result<String, String> {
-    if !valid_ollama_model(&model) { return Err("Invalid Ollama model tag".into()); }
-    require_online(&state).await?;
-    let description = format!(
-        "Download Ollama model {} from the registry?\nThis may use several GB of disk space and internet data.",
-        model
-    );
-    let accepted = tokio::task::spawn_blocking(move || native_approve(&description))
-        .await.map_err(|_| "Download confirmation failed".to_string())?;
-    if !accepted { return Err("Download cancelled by user".into()); }
-
-    use futures_util::StreamExt;
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(3600))
-        .build().map_err(|_| "Ollama client unavailable".to_string())?;
-    let response = client.post("http://127.0.0.1:11434/api/pull")
-        .json(&serde_json::json!({"model": model, "stream": true}))
-        .send().await.map_err(|_| "Ollama is not running. Open Ollama and retry.".to_string())?;
-    check_response(response.status())?;
-    let mut body = response.bytes_stream();
-    let mut buffer = Vec::<u8>::new();
-    while let Some(piece) = body.next().await {
-        let bytes = piece.map_err(|_| "Model download interrupted".to_string())?;
-        if buffer.len() + bytes.len() > 128 * 1024 {
-            return Err("Unexpectedly large Ollama progress response".into());
-        }
-        buffer.extend_from_slice(&bytes);
-        while let Some(end) = buffer.iter().position(|byte| *byte == b'\n') {
-            let line: Vec<u8> = buffer.drain(..=end).collect();
-            if let Ok(data) = serde_json::from_slice::<serde_json::Value>(&line) {
-                if let Some(error) = data.get("error").and_then(|x| x.as_str()) {
-                    return Err(format!("Ollama rejected model download: {}", error.chars().take(250).collect::<String>()));
-                }
-                let _ = app.emit("aurix://ollama-progress", &serde_json::json!({
-                    "model": model,
-                    "status": data.get("status").and_then(|x| x.as_str()).unwrap_or("Downloading"),
-                    "total": data.get("total").and_then(|x| x.as_u64()),
-                    "completed": data.get("completed").and_then(|x| x.as_u64()),
-                }));
-            }
-        }
-    }
-    Ok(format!("Model {} downloaded and ready to activate.", model))
-}
-
-#[tauri::command]
-async fn remove_ollama_model(
-    model: String, state: State<'_, BridgeState>
-) -> Result<String, String> {
-    if !valid_ollama_model(&model) { return Err("Invalid model tag".into()); }
-    let display = format!("Permanently delete downloaded Ollama model {}?", model);
-    let approved = tokio::task::spawn_blocking(move || native_approve(&display))
-        .await.map_err(|_| "Deletion approval unavailable".to_string())?;
-    if !approved { return Err("Deletion cancelled".into()); }
-    let chosen = local_get(&state, "/models").await?;
-    if chosen.get("selected").and_then(|x| x.as_str()) == Some(model.as_str())
-       && chosen.get("backend").and_then(|x| x.as_str()) == Some("ollama") {
-        return Err("Switch to another model before deleting the active model".into());
-    }
-    let response = reqwest::Client::new()
-        .delete("http://127.0.0.1:11434/api/delete")
-        .json(&serde_json::json!({"model": model}))
-        .timeout(Duration::from_secs(30))
-        .send().await.map_err(|_| "Ollama is unavailable".to_string())?;
-    check_response(response.status())?;
-    Ok(format!("Deleted {}", model))
+    let preview = format!("Import and activate local model:\n{path}\n\nSHA-256: {sha256}\n\nNo download is performed. Existing model with this filename will be replaced.");
+    let approved = tokio::task::spawn_blocking(move || native_approve(&preview))
+        .await.map_err(|_| "Approval unavailable".to_string())?;
+    if !approved { return Err("Model import cancelled".into()); }
+    local_post(&state, "/models/import", serde_json::json!({"path":path,"sha256":sha256})).await
 }
 
 #[tauri::command]
@@ -593,7 +470,9 @@ fn main() {
         Ok(child) => (Some(child), String::new()),
         Err(error) => (None, error),
     };
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(120))
+    let client = reqwest::Client::builder().no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(3)).timeout(Duration::from_secs(120))
         .build().expect("Unable to create local HTTP client");
     tauri::Builder::default()
         .manage(SysState(Mutex::new(System::new_all())))
@@ -635,21 +514,8 @@ fn main() {
             listen_voice, get_wake_status, set_wake_enabled, speak_text, stop_speech,
             kill_actions, resume_actions, list_activity, reject_trust,
             get_telemetry_history, export_telemetry_csv,
-            list_model_choices, activate_model, install_ollama, pull_ollama_model, remove_ollama_model
+            list_model_choices, import_local_model
         ])
         .run(tauri::generate_context!())
         .expect("error while running AURIX");
-}
-
-#[cfg(test)]
-mod model_setup_tests {
-    use super::valid_ollama_model;
-    #[test]
-    fn only_local_model_tags_are_accepted() {
-        assert!(valid_ollama_model("qwen3:4b"));
-        assert!(valid_ollama_model("gpt-oss:20b"));
-        assert!(!valid_ollama_model("gpt-oss:20b-cloud"));
-        assert!(!valid_ollama_model("http://example.com/llm"));
-        assert!(!valid_ollama_model("../../cmd"));
-    }
 }

@@ -28,6 +28,7 @@ try {
     }
     $arguments = @(
         '-m','PyInstaller','--clean','--noconfirm','--onefile','--noconsole',
+        '--collect-all','llama_cpp',
         '--name','aurix-worker','--paths',$root,
         '--distpath',(Join-Path $buildPath 'dist'),
         '--workpath',(Join-Path $buildPath 'pyinstaller'),
@@ -109,7 +110,7 @@ try {
     try {
         npm install --global npm@11.6.0
         if ($LASTEXITCODE -ne 0) { throw 'Required npm toolchain installation failed' }
-        npm install
+        npm ci
         if ($LASTEXITCODE -ne 0) { throw 'npm dependency installation failed' }
         npm run tauri build
         if ($LASTEXITCODE -ne 0) { throw 'Tauri installer build failed' }
