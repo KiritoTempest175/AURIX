@@ -1,0 +1,39 @@
+name: One-time Dependabot Branch Cleanup
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  clean:
+    if: ${{ github.repository == 'KiritoTempest175/AURIX' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Delete 14 identified Dependabot branches only
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const targets = ["dependabot/cargo/nvml-wrapper-0.13.0","dependabot/cargo/pyo3-0.29.3","dependabot/cargo/rand-0.10","dependabot/cargo/sysinfo-0.39.6","dependabot/cargo/windows-0.62.2","dependabot/npm_and_yarn/frontend/react-19.3.0","dependabot/npm_and_yarn/frontend/react-dom-19.3.0","dependabot/npm_and_yarn/frontend/vitejs/plugin-react-6.1.2","dependabot/npm_and_yarn/frontend/vitest-5.0.3","dependabot/pip/accelerate-gte-1.15.0","dependabot/pip/bitsandbytes-gte-0.50.2","dependabot/pip/piper-tts-gte-1.8.0","dependabot/pip/pyarrow-gte-25.0.1","dependabot/pip/speechrecognition-gte-3.17.0"];
+            let errors = 0;
+            for (const branch of targets) {
+              try {
+                await github.rest.git.deleteRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `heads/${branch}`,
+                });
+                core.info(`Deleted branch: ${branch}`);
+              } catch (err) {
+                if (err.status === 404) {
+                  core.info(`Already absent: ${branch}`);
+                } else {
+                  errors++;
+                  core.error(`Cannot delete ${branch}: ${err.message}`);
+                }
+              }
+            }
+            if (errors) core.setFailed(`Deletion failures: ${errors}`);
