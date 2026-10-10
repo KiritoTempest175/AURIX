@@ -752,3 +752,22 @@ input {
     animation: none;
   }
 }
+
+/* Security approval: a native confirmation is required after this preview. */
+.approval-card {
+  border: 1px solid var(--warn);
+  border-radius: 12px;
+  padding: 12px;
+  margin: 10px 0;
+  font-size: 12px;
+}
+.approval-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.approval-actions button {
+  background: var(--panel, #192633);
+  border: 1px solid var(--border);
+  color: var(--text, #fff);
+  border-radius: 6px;
+  padding: 9px 12px;
+  cursor: pointer;
+}
+.nav-item:disabled { opacity: .45; cursor: not-allowed; }

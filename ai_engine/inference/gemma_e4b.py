@@ -478,7 +478,7 @@ class GemmaModelRunner:
         # failed with "name 'sys_rules' is not defined". The unified-vs-legacy
         # fallback described in the original comment was never actually
         # implemented; it is now.
-        sys_prompt = load_md("aurix_vault/model.md")
+        sys_prompt = load_md("config/LUNA.md")
         if not sys_prompt.strip():
             legacy_persona = load_md("aurix_vault/aurix.md")
             legacy_rules = load_md("aurix_vault/rules.md")

@@ -393,32 +393,45 @@ class FileSandbox:
 
     @classmethod
     def validate_path(cls, target: Path) -> None:
-        """Enforces drive-level isolation and sandboxing."""
-        target_str = str(target)
+        """Allow only canonical user folders or explicitly configured roots.
 
-        blocked_keywords = ["%appdata%", "%systemroot%", "%temp%", "appdata", "windows", "system32", "$recycle.bin"]
-        for kw in blocked_keywords:
-            if kw in target_str.lower():
-                raise SecurityException(f"Access denied: Path references restricted system identifier '{kw}'.")
+        The old implementation permitted all of D:/, E:/, etc. We do not
+        treat a drive letter as authorization.
+        """
+        canonical = Path(target).expanduser().resolve(strict=False)
+        blocked_parts = {"appdata", "windows", "system32", "$recycle.bin"}
+        if any(part.casefold() in blocked_parts for part in canonical.parts):
+            raise SecurityException("Access denied: restricted system location")
 
-        drive = target.drive.upper()
-        if drive.startswith("C"):
-            is_permitted = any(
-                allowed == target or allowed in target.parents
-                for allowed in cls.ALLOWED_C_DIRS
+        roots = [p.resolve(strict=False) for p in cls.ALLOWED_C_DIRS]
+        config_file = Path(__file__).resolve().parent.parent / "config.toml"
+        try:
+            import sys
+            if sys.version_info >= (3, 11):
+                import tomllib
+            else:
+                import tomli as tomllib
+            with config_file.open("rb") as stream:
+                configured = tomllib.load(stream)
+            for entry in configured.get("security", {}).get("allowed_project_paths", []):
+                if not isinstance(entry, str) or not entry.strip():
+                    continue
+                roots.append(Path(entry).expanduser().resolve(strict=False))
+        except (FileNotFoundError, OSError, ValueError):
+            pass
+
+        if not any(root == canonical or root in canonical.parents for root in roots):
+            raise SecurityException(
+                "Access denied: target is outside configured trusted directories"
             )
-            if not is_permitted:
-                raise SecurityException(
-                    f"Access denied: C: drive operations are strictly restricted to "
-                    f"Desktop, Downloads, Documents, Pictures, Music, and Videos. Target: {target}"
-                )
 
     @classmethod
     def is_autonomous_memory_path(cls, path: Path) -> bool:
         """Determines if the file path is part of Luna's internal memory/vault."""
         p_str = str(path).lower()
-        memory_indicators = [".aurix_memory", ".obsidian", "memory", "history", "vault"]
-        return any(ind in p_str for ind in memory_indicators)
+        # Never authorize a destructive operation merely because a filename
+        # contains a word such as "memory" or "vault".
+        return False
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -574,11 +587,7 @@ class FileController:
                 send2trash.send2trash(str(target))
                 return f"Moved to Recycle Bin: {target.name}"
             else:
-                if target.is_dir():
-                    shutil.rmtree(target)
-                else:
-                    target.unlink()
-                return f"Permanently removed: {target.name}"
+                return "Deletion disabled: install send2trash to allow Recycle Bin recovery."
 
         except Exception as e:
             return f"Delete error: {e}"
@@ -665,8 +674,10 @@ class FileController:
             if not target.exists():
                 return f"Target not found: {target}"
 
-            new_target = target.parent / new_name
+            new_target = (target.parent / new_name).resolve()
             FileSandbox.validate_path(new_target)
+            if new_target.parent != target.parent:
+                return "Rename denied: new_name must be a filename, not a path."
 
             if new_target.exists():
                 return f"Conflict: An item named '{new_name}' already exists in that location."

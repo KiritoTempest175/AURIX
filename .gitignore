@@ -90,3 +90,11 @@ frontend/dist/
 frontend/src-tauri/target/
 frontend/src-tauri/gen/
 frontend/package-lock.json
+
+
+# User-owned memory (never commit personal data)
+aurix_vault/
+vault/
+.local_memory/
+*.enc
+*.secret

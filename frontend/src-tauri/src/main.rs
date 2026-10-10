@@ -1,193 +1,179 @@
-// Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Mutex;
+use std::time::Duration;
 use sysinfo::System;
 use tauri::State;
 
-// ---------------------------------------------------------------------------
-// Telemetry (native, via sysinfo)
-// ---------------------------------------------------------------------------
-#[derive(Serialize)]
-struct Telemetry {
-    cpu: f32,
-    ram: f32,
-    gpu: f32,
-    gpu_temp: f32,
-}
-
-struct SysState(Mutex<System>);
-
-#[tauri::command]
-fn get_telemetry(state: State<SysState>) -> Telemetry {
-    let mut sys = state.0.lock().unwrap();
-    sys.refresh_cpu_usage();
-    sys.refresh_memory();
-
-    let cpu = sys.global_cpu_usage();
-    let ram = (sys.used_memory() as f32 / sys.total_memory().max(1) as f32) * 100.0;
-
-    // GPU usage/temp isn't exposed by sysinfo. For NVIDIA hardware (e.g. RTX 4060),
-    // wire in the `nvml-wrapper` crate here and read utilization + temperature
-    // from the driver. Placeholder values keep the UI functional without it.
-    let gpu = 0.0;
-    let gpu_temp = 0.0;
-
-    Telemetry { cpu, ram, gpu, gpu_temp }
-}
-
-// ---------------------------------------------------------------------------
-// Python Bridge Server management
-// ---------------------------------------------------------------------------
-struct BridgeProcess(Mutex<Option<Child>>);
-
 const BRIDGE_URL: &str = "http://127.0.0.1:9721";
 
-/// Spawn the Python bridge_server.py that connects the React UI to the
-/// AURIX AI brain (dispatcher, tool executor, etc.).
-fn spawn_bridge(project_root: &str) -> Option<Child> {
-    let bridge_path = format!("{}/frontend/bridge_server.py", project_root);
+struct BridgeState {
+    token: String,
+    process: Mutex<Option<Child>>,
+    client: reqwest::Client,
+}
 
-    // Try python, then python3
-    let child = Command::new("python")
-        .arg(&bridge_path)
-        .current_dir(project_root)
-        .spawn()
-        .or_else(|_| {
-            Command::new("python3")
-                .arg(&bridge_path)
-                .current_dir(project_root)
-                .spawn()
-        });
-
-    match child {
-        Ok(c) => {
-            eprintln!("[tauri] Bridge server spawned (PID {})", c.id());
-            Some(c)
-        }
-        Err(e) => {
-            eprintln!("[tauri] Failed to spawn bridge server: {e}");
-            None
+impl Drop for BridgeState {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.process.lock() {
+            if let Some(mut process) = guard.take() {
+                let _ = process.kill();
+                let _ = process.wait();
+            }
         }
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tauri commands that proxy to the Python bridge
-// ---------------------------------------------------------------------------
+fn secret() -> String {
+    let mut buf = [0_u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut buf);
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn discover_root() -> Option<PathBuf> {
+    if let Ok(root) = std::env::var("AURIX_ROOT") {
+        let path = PathBuf::from(root);
+        if path.join("frontend/bridge_server.py").is_file() {
+            return Some(path);
+        }
+    }
+    let cwd = std::env::current_dir().ok()?;
+    for base in cwd.ancestors() {
+        if base.join("frontend/bridge_server.py").is_file() {
+            return Some(base.to_path_buf());
+        }
+    }
+    None
+}
+
+fn spawn_bridge(root: &Path, token: &str) -> Option<Child> {
+    let entry = root.join("frontend/bridge_server.py");
+    for python in ["python", "python3"] {
+        let result = Command::new(python)
+            .arg(&entry)
+            .current_dir(root)
+            .env("AURIX_BRIDGE_TOKEN", token)
+            .env("AURIX_BRIDGE_HOST", "127.0.0.1")
+            .spawn();
+        if let Ok(child) = result {
+            return Some(child);
+        }
+    }
+    eprintln!("AURIX worker could not start: Python 3.10+ is required.");
+    None
+}
+
+fn check_response(status: reqwest::StatusCode) -> Result<(), String> {
+    if status.is_success() { Ok(()) } else { Err(format!("Worker rejected request (HTTP {})", status.as_u16())) }
+}
+
+#[derive(Serialize)]
+struct Telemetry { cpu: f32, ram: f32, gpu: Option<f32>, gpu_temp: Option<f32> }
+struct SysState(Mutex<System>);
+
+#[tauri::command]
+fn get_telemetry(state: State<'_, SysState>) -> Telemetry {
+    let mut sys = state.0.lock().expect("telemetry mutex poisoned");
+    sys.refresh_cpu_usage();
+    sys.refresh_memory();
+    let ram = sys.used_memory() as f32 / sys.total_memory().max(1) as f32 * 100.0;
+    Telemetry { cpu: sys.global_cpu_usage(), ram, gpu: None, gpu_temp: None }
+}
+
 #[derive(Deserialize)]
-struct DispatchRequest {
-    text: String,
-}
-
+struct DispatchRequest { text: String }
 #[derive(Serialize, Deserialize)]
-struct DispatchResponse {
-    reply: String,
-    action: bool,
-}
-
-#[tauri::command]
-async fn send_message(payload: DispatchRequest) -> Result<DispatchResponse, String> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{BRIDGE_URL}/dispatch"))
-        .json(&serde_json::json!({"text": payload.text}))
-        .send()
-        .await
-        .map_err(|e| format!("Bridge request failed: {e}"))?;
-
-    let data: DispatchResponse = resp
-        .json()
-        .await
-        .map_err(|e| format!("Bridge response parse error: {e}"))?;
-
-    Ok(data)
-}
-
+struct DispatchResponse { reply: String, action: bool }
 #[derive(Serialize, Deserialize)]
-struct BridgeTelemetry {
-    cpu: f64,
-    ram: f64,
-    gpu: f64,
-    gpu_temp: f64,
-}
-
-#[tauri::command]
-async fn get_bridge_telemetry() -> Result<BridgeTelemetry, String> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(format!("{BRIDGE_URL}/telemetry"))
-        .send()
-        .await
-        .map_err(|e| format!("Bridge telemetry failed: {e}"))?;
-
-    let data: BridgeTelemetry = resp
-        .json()
-        .await
-        .map_err(|e| format!("Bridge telemetry parse error: {e}"))?;
-
-    Ok(data)
-}
-
+struct BridgeTelemetry { cpu: Option<f64>, ram: Option<f64>, gpu: Option<f64>, gpu_temp: Option<f64> }
 #[derive(Deserialize)]
-struct TrustRequest {
-    request: String,
-}
+struct TrustRequest { request: String }
+#[derive(Deserialize)]
+struct TrustPreview { description: Option<String>, error: Option<String> }
+#[derive(Serialize)]
+struct TrustResponse { result: String }
 
-#[derive(Serialize, Deserialize)]
-struct TrustResponse {
-    result: String,
+#[tauri::command]
+async fn send_message(payload: DispatchRequest, state: State<'_, BridgeState>) -> Result<DispatchResponse, String> {
+    if payload.text.len() > 16000 { return Err("Input is too long".into()); }
+    let response = state.client.post(format!("{BRIDGE_URL}/dispatch"))
+        .bearer_auth(&state.token).json(&serde_json::json!({"text":payload.text}))
+        .send().await.map_err(|_| "Local AI worker is unavailable".to_string())?;
+    check_response(response.status())?;
+    response.json().await.map_err(|_| "Invalid worker reply".to_string())
 }
 
 #[tauri::command]
-async fn execute_trust(payload: TrustRequest) -> Result<TrustResponse, String> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{BRIDGE_URL}/execute_trust"))
-        .json(&serde_json::json!({"request": payload.request}))
-        .send()
-        .await
-        .map_err(|e| format!("Bridge trust request failed: {e}"))?;
-
-    let data: TrustResponse = resp
-        .json()
-        .await
-        .map_err(|e| format!("Bridge trust parse error: {e}"))?;
-
-    Ok(data)
+async fn get_bridge_telemetry(state: State<'_, BridgeState>) -> Result<BridgeTelemetry, String> {
+    let response = state.client.get(format!("{BRIDGE_URL}/telemetry"))
+        .bearer_auth(&state.token).send().await
+        .map_err(|_| "Local AI worker unavailable".to_string())?;
+    check_response(response.status())?;
+    response.json().await.map_err(|_| "Invalid worker telemetry".to_string())
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
+#[tauri::command]
+async fn get_bridge_health(state: State<'_, BridgeState>) -> Result<bool, String> {
+    let response = state.client.get(format!("{BRIDGE_URL}/health"))
+        .bearer_auth(&state.token).send().await
+        .map_err(|_| "Local AI worker unavailable".to_string())?;
+    Ok(response.status().is_success())
+}
+
+#[cfg(windows)]
+fn native_approve(description: &str) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO
+    };
+    let title: Vec<u16> = "AURIX — Authorize action\0".encode_utf16().collect();
+    let details: Vec<u16> = format!(
+        "LUNA requests permission to perform:\n\n{}\n\nApprove this exact action?",
+        description
+    ).encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe { MessageBoxW(0, details.as_ptr(), title.as_ptr(),
+        MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES }
+}
+
+#[cfg(not(windows))]
+fn native_approve(_description: &str) -> bool { false }
+
+#[tauri::command]
+async fn execute_trust(payload: TrustRequest, state: State<'_, BridgeState>) -> Result<TrustResponse, String> {
+    let request = payload.request.trim();
+    if request.len() != 12 || !request.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("Invalid approval identifier".into());
+    }
+    let response = state.client.post(format!("{BRIDGE_URL}/trust_preview"))
+        .bearer_auth(&state.token)
+        .json(&serde_json::json!({"request":request}))
+        .send().await.map_err(|_| "Local AI worker unavailable".to_string())?;
+    check_response(response.status())?;
+    let preview: TrustPreview = response.json().await.map_err(|_| "Invalid approval details".to_string())?;
+    if preview.error.is_some() { return Err("Action expired or unavailable".into()); }
+    let description = preview.description.ok_or("Missing action description")?;
+    let authorized = tokio::task::spawn_blocking(move || native_approve(&description))
+        .await.map_err(|_| "Approval dialog failed".to_string())?;
+    if !authorized { return Ok(TrustResponse { result: "Action rejected by user.".into() }); }
+    let result = state.client.post(format!("{BRIDGE_URL}/execute_trust"))
+        .bearer_auth(&state.token).json(&serde_json::json!({"request":request}))
+        .send().await.map_err(|_| "Local AI worker unavailable".to_string())?;
+    check_response(result.status())?;
+    result.json().await.map_err(|_| "Invalid action result".to_string())
+}
+
 fn main() {
-    // Resolve the AURIX project root (two levels up from src-tauri/)
-    let project_root = std::env::current_dir()
-        .ok()
-        .and_then(|p| p.parent().map(|pp| pp.parent().map(|ppp| ppp.to_path_buf())))
-        .flatten()
-        .unwrap_or_else(|| {
-            // Fallback: use AURIX_ROOT env var or default
-            std::path::PathBuf::from(
-                std::env::var("AURIX_ROOT").unwrap_or_else(|_| "e:/AURIX".to_string()),
-            )
-        });
-
-    let root_str = project_root.to_string_lossy().to_string();
-
-    // Spawn the Python bridge server
-    let bridge = spawn_bridge(&root_str);
-
+    let token = secret();
+    let child = discover_root().and_then(|root| spawn_bridge(&root, &token));
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(120))
+        .build().expect("Unable to create local HTTP client");
     tauri::Builder::default()
         .manage(SysState(Mutex::new(System::new_all())))
-        .manage(BridgeProcess(Mutex::new(bridge)))
+        .manage(BridgeState { token, process: Mutex::new(child), client })
         .invoke_handler(tauri::generate_handler![
-            get_telemetry,
-            send_message,
-            get_bridge_telemetry,
-            execute_trust,
+            get_telemetry, get_bridge_telemetry, get_bridge_health, send_message, execute_trust
         ])
         .run(tauri::generate_context!())
         .expect("error while running AURIX");

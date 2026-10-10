@@ -651,6 +651,12 @@ class ToolExecutor:
 
         args = args or {}
 
+        # Until a restricted Windows process runner is installed, never allow
+        # arbitrary model-generated shell commands. Native user confirmation
+        # alone is not an operating-system sandbox.
+        if tool_name == "shell_exec":
+            return "SHELL_DISABLED: Arbitrary shell execution is disabled in this build."
+
         if not self.supports(
             tool_name
         ):
@@ -832,6 +838,18 @@ class ToolExecutor:
     # ============================================================
     # HUMAN APPROVAL
     # ============================================================
+
+    def preview_pending(self, request_id: str) -> Dict[str, Any]:
+        """Return the exact pending action to the trusted native desktop UI."""
+        self._cleanup_expired_pending()
+        pending = self._pending_actions.get(str(request_id).strip())
+        if not pending:
+            return {"error": "NOT_FOUND"}
+        return {
+            "request_id": str(request_id).strip(),
+            "description": self._describe_action(pending["tool"], pending["args"]),
+            "expires_in": max(0, int(float(pending["expires_at"]) - time.time())),
+        }
 
     def confirm_pending(
         self,

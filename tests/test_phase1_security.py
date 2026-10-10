@@ -199,10 +199,8 @@ def test_pending_security_request_expires():
     executor = ToolExecutor()
 
     reply = executor.execute(
-        "shell_exec",
-        {
-            "command": "echo test"
-        },
+        "delete_item",
+        {"path": "C:/test-pending-expiry.txt"},
     )
 
     assert reply.startswith(
@@ -231,10 +229,8 @@ def test_changed_pending_action_is_rejected():
     executor = ToolExecutor()
 
     reply = executor.execute(
-        "shell_exec",
-        {
-            "command": "echo safe"
-        },
+        "delete_item",
+        {"path": "C:/test-action-change.txt"},
     )
 
     assert reply.startswith(
@@ -248,8 +244,8 @@ def test_changed_pending_action_is_rejected():
 
     executor._pending_actions[
         request_id
-    ]["args"]["command"] = (
-        "echo changed"
+    ]["args"]["path"] = (
+        "C:/different-file.txt"
     )
 
     result = executor.confirm_pending(

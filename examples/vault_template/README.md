@@ -1,0 +1,1 @@
+# Personal memory template\n\nThis folder contains no personal data. Keep the actual vault in an OS-controlled application data directory, outside Git.\n

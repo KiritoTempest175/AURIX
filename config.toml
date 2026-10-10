@@ -5,8 +5,7 @@
 [security]
 
 allowed_project_paths = [
-    "G:/Websites By Ai/AURIX",
-    "C:/Users/Zain/Projects"
+    # Add trusted project roots on your own workstation; empty denies autonomous writes.
 ]
 
 file_jail_enabled = true
@@ -40,7 +39,7 @@ auto_tts_reply = true
 
 [resources]
 
-max_ram_gb = 16.0
+max_ram_gb = 12.0
 max_vram_gb = 6.0
 cpu_throttle_percent = 85.0
 poll_interval_ms = 1000
@@ -48,16 +47,18 @@ suspend_on_overload = true
 
 
 [general]
+# The application never sends traffic unless you explicitly request an online action.
+# Online action tools are not yet universally governed by this flag.
+offline_mode = true
 
 theme = "dark"
-offline_mode = true
 log_level = "info"
 log_file = "logs/aurix_session.log"
 
 
 [llm]
 
-model_name = "google/gemma-4-E4B-it"
+model_name = "google/gemma-4-E4B-it" # legacy Transformers path; GGUF runtime pending
 model_alias = "Gemma 4 E4B (4-bit NF4, GPU)"
 effective_params = "E4B"
 max_seq_length = 2048

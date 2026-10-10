@@ -1,42 +1,20 @@
-# AURIX
+# AURIX desktop shell
 
-React + Tauri desktop shell for AURIX, styled after your reference (dark
-navy, cyan-glow core), with the wordmark changed to AURIX, chat moved to a
-side panel instead of the center focus, live CPU/RAM/GPU/GPU-temp telemetry,
-and a listen control that shows Standby / Listening / Processing with an
-animated waveform.
+React 18 + Vite + Tauri 2 interface for the LUNA agent. The **native** Tauri process owns the session credential used to reach the Python loopback worker. The browser preview is a UI-only environment; it cannot invoke desktop actions.
 
-## Structure
-- `src/App.jsx`, `src/App.css` — the whole UI (orb centerpiece, left nav,
-  right sidebar with system status, telemetry bars, and chat).
-- `src-tauri/` — minimal Tauri v2 backend. `get_telemetry` currently reads
-  real CPU/RAM via `sysinfo`; GPU usage/temp are stubbed at 0 — wire in
-  `nvml-wrapper` there for real NVIDIA readings (see comment in `main.rs`).
+## Development
 
-## Run in the browser (fastest way to preview the design)
-```bash
+```powershell
 npm install
-npm run dev
+npm run tauri dev
 ```
 
-## Run as the actual desktop app
-Requires the Rust toolchain and Tauri's OS prerequisites
-(https://v2.tauri.app/start/prerequisites/).
-```bash
-npm install
-npm run tauri dev      # dev window
-npm run tauri build    # production installer
-```
+`npm run dev` opens only the browser preview. It does **not** start the worker.
 
-## Wiring real telemetry to the UI
-`useSimulatedTelemetry` in `App.jsx` currently fakes the numbers with a
-random walk so the panel is alive in the browser preview. Swap it for:
-```js
-import { invoke } from "@tauri-apps/api/core";
-const stats = await invoke("get_telemetry"); // { cpu, ram, gpu, gpu_temp }
-```
-polled on an interval, once the app is running inside Tauri.
+The AI worker currently requires Python and the source checkout on the computer. The installer build has not been integrated with a bundled sidecar. Until that is done, packaged installers are not supported for end users.
 
-## Icons
-No app icons are included yet. Run `npx tauri icon path/to/logo.png` once
-you have an AURIX mark to generate the full icon set into `src-tauri/icons/`.
+## Backend boundary
+
+A 256-bit per-session token is created by Rust on startup. It is injected into the worker environment and used by native `invoke` commands; never share it with React. The bridge is loopback-bound and denies browser Origins. Exact pending actions are previewed from the worker; Tauri opens a native Windows confirmation before requesting execution.
+
+The voice button, GPU telemetry, and most navigation panels are incomplete and clearly labeled, not represented as fully operational. See the root README for the audited status.

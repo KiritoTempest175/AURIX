@@ -1,44 +1,23 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
-// ---------------------------------------------------------------------------
-// Bridge API helpers — works in both Tauri (invoke) and browser (fetch) mode
-// ---------------------------------------------------------------------------
-let tauriInvoke = null;
-
-try {
-  // Dynamic import so it doesn't crash outside of Tauri
-  const tauriCore = await import("@tauri-apps/api/core");
-  tauriInvoke = tauriCore.invoke;
-} catch {
-  // Running in plain browser — fall back to direct HTTP
-}
-
-const BRIDGE_URL = "http://127.0.0.1:9721";
-
-async function callBridge(method, path, body) {
-  const opts = { method, headers: { "Content-Type": "application/json" } };
-  if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(`${BRIDGE_URL}${path}`, opts);
-  return res.json();
-}
+// The session credential never enters JavaScript; only native commands can
+// access the authenticated Python worker.
+const isTauri = () =>
+  typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
 async function apiDispatch(text) {
-  if (tauriInvoke) {
-    return tauriInvoke("send_message", { payload: { text } });
-  }
-  return callBridge("POST", "/dispatch", { text });
+  if (!isTauri()) throw new Error("Desktop runtime required.");
+  return invoke("send_message", { payload: { text } });
 }
 
 async function apiTelemetry() {
-  if (tauriInvoke) {
-    try {
-      return await tauriInvoke("get_bridge_telemetry");
-    } catch {
-      // Bridge not running — fall back to native sysinfo command
-      return tauriInvoke("get_telemetry");
-    }
+  if (!isTauri()) return { cpu: null, ram: null, gpu: null, gpu_temp: null };
+  try {
+    return await invoke("get_bridge_telemetry");
+  } catch {
+    return invoke("get_telemetry");
   }
-  return callBridge("GET", "/telemetry");
 }
 
 // ---------------------------------------------------------------------------
@@ -55,33 +34,38 @@ const STATUS = {
 // ---------------------------------------------------------------------------
 function useTelemetry() {
   const [stats, setStats] = useState({
-    cpu: 0,
-    ram: 0,
-    gpu: 0,
-    gpu_temp: 0,
+    cpu: null,
+    ram: null,
+    gpu: null,
+    gpu_temp: null,
   });
 
   useEffect(() => {
     let active = true;
+    let pending = false;
 
     const poll = async () => {
+      if (pending) return;
+      pending = true;
       try {
         const data = await apiTelemetry();
         if (active) {
           setStats({
-            cpu: Math.round(data.cpu ?? 0),
-            ram: Math.round(data.ram ?? 0),
-            gpu: Math.round(data.gpu ?? 0),
-            gpu_temp: Math.round(data.gpu_temp ?? data.gpuTemp ?? 0),
+            cpu: data.cpu == null ? null : Math.round(data.cpu),
+            ram: data.ram == null ? null : Math.round(data.ram),
+            gpu: data.gpu == null ? null : Math.round(data.gpu),
+            gpu_temp: data.gpu_temp == null ? null : Math.round(data.gpu_temp),
           });
         }
       } catch {
-        // Bridge may not be up yet — keep polling silently
+        // Service can start after UI; retry on next tick.
+      } finally {
+        pending = false;
       }
     };
 
     poll();
-    const id = setInterval(poll, 2000);
+    const id = setInterval(poll, 3000);
     return () => {
       active = false;
       clearInterval(id);
@@ -100,14 +84,14 @@ function Bar({ label, value, unit = "%", accent = "var(--accent)" }) {
       <div className="bar-row-top">
         <span className="bar-label">{label}</span>
         <span className="bar-value">
-          {value}
-          <span className="bar-unit">{unit}</span>
+          {value == null ? "N/A" : value}
+          {value == null ? null : <span className="bar-unit">{unit}</span>}
         </span>
       </div>
       <div className="bar-track">
         <div
           className="bar-fill"
-          style={{ width: `${Math.min(100, value)}%`, background: accent }}
+          style={{ width: `${Math.min(100, Math.max(0, value ?? 0))}%`, background: accent }}
         />
       </div>
     </div>
@@ -132,40 +116,66 @@ export default function App() {
   const telemetry = useTelemetry();
   const [status, setStatus] = useState("standby");
   const [messages, setMessages] = useState([
-    { from: "aurix", text: "Systems nominal. Say the word when you're ready." },
+    { from: "aurix", text: "LUNA ready for text commands. Voice input is not connected in this build." },
   ]);
   const [draft, setDraft] = useState("");
   const logRef = useRef(null);
-  const timers = useRef([]);
+  const [approval, setApproval] = useState(null);
+  const [workerOnline, setWorkerOnline] = useState(false);
+  const [approving, setApproving] = useState(false);
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [messages]);
 
-  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let active = true;
+    const check = async () => {
+      try {
+        const ready = await invoke("get_bridge_health");
+        if (active) setWorkerOnline(Boolean(ready));
+      } catch {
+        if (active) setWorkerOnline(false);
+      }
+    };
+    check();
+    const pollId = setInterval(check, 5000);
+    return () => { active = false; clearInterval(pollId); };
+  }, []);
 
-  // --- Mic press (simulated listen cycle for now) ---
+  // Never simulate captured speech or claim that microphone capture succeeded.
   const handleMicPress = () => {
-    timers.current.forEach(clearTimeout);
-    timers.current = [];
+    setMessages((items) => [
+      ...items,
+      { from: "aurix", text: "Voice input is not yet available. Use text chat." },
+    ]);
+  };
 
-    if (status === "standby") {
-      setStatus("listening");
-      const t1 = setTimeout(() => {
-        setStatus("processing");
-        const t2 = setTimeout(() => {
-          setMessages((m) => [
-            ...m,
-            { from: "user", text: "(voice input captured)" },
-            { from: "aurix", text: "Got it — working on that now." },
-          ]);
-          setStatus("standby");
-        }, 1400);
-        timers.current.push(t2);
-      }, 2600);
-      timers.current.push(t1);
-    } else {
-      setStatus("standby");
+  const respondToApproval = async (accept) => {
+    const currentApproval = approval;
+    if (!currentApproval || approving) return;
+    setApproval(null);
+    if (!accept) {
+      setMessages((items) => [...items, { from: "aurix", text: "Action rejected." }]);
+      return;
+    }
+    setApproving(true);
+    try {
+      const response = await invoke("execute_trust", {
+        payload: { request: currentApproval.id },
+      });
+      setMessages((items) => [
+        ...items,
+        { from: "aurix", text: response.result || "Action finished without a result." },
+      ]);
+    } catch (error) {
+      setMessages((items) => [
+        ...items,
+        { from: "aurix", text: `Approval failed: ${String(error)}` },
+      ]);
+    } finally {
+      setApproving(false);
     }
   };
 
@@ -182,7 +192,21 @@ export default function App() {
 
       try {
         const data = await apiDispatch(text);
-        setMessages((m) => [...m, { from: "aurix", text: data.reply || "Acknowledged." }]);
+        const reply = String(data.reply ?? "");
+        if (reply.startsWith("TRUST_TOKEN_REQUIRED:")) {
+          const [, id, ...description] = reply.split(":");
+          if (/^[a-f0-9]{12}$/i.test(id)) {
+            setApproval({ id, description: description.join(":") });
+            setMessages((m) => [...m, {
+              from: "aurix",
+              text: "This action requires your explicit confirmation.",
+            }]);
+          } else {
+            setMessages((m) => [...m, { from: "aurix", text: "Invalid approval request." }]);
+          }
+        } else {
+          setMessages((m) => [...m, { from: "aurix", text: reply || "No response." }]);
+        }
       } catch (err) {
         setMessages((m) => [
           ...m,
@@ -219,7 +243,7 @@ export default function App() {
 
         <nav className="nav-list">
           {["Command", "Activity Log", "Integrations", "System"].map((item, i) => (
-            <button key={item} className={`nav-item ${i === 0 ? "is-active" : ""}`}>
+            <button key={item} className={`nav-item ${i === 0 ? "is-active" : ""}`} disabled={i !== 0} title={i === 0 ? "Command" : "Not yet implemented"}>
               <span className="nav-dot" />
               {item}
             </button>
@@ -244,7 +268,7 @@ export default function App() {
             })}
           </span>
           <span className="online">
-            <span className="pulse pulse-accent" /> System online
+            <span className={`pulse ${workerOnline ? "pulse-accent" : "pulse-warn"}`} /> {workerOnline ? "Worker connected" : "Worker unavailable"}
           </span>
         </header>
 
@@ -301,19 +325,19 @@ export default function App() {
           <div className="status-grid">
             <div className="status-item">
               <span>Core system</span>
-              <b className="ok">Online</b>
+              <b className={workerOnline ? "ok" : ""}>{workerOnline ? "Connected" : "Disconnected"}</b>
             </div>
             <div className="status-item">
               <span>Neural link</span>
-              <b className="ok">Ready</b>
+              <b>Unverified</b>
             </div>
             <div className="status-item">
               <span>Security</span>
-              <b className="ok">Encrypted</b>
+              <b>Native approval</b>
             </div>
             <div className="status-item">
               <span>Network</span>
-              <b className="ok">Stable</b>
+              <b>Local only</b>
             </div>
           </div>
         </section>
@@ -333,13 +357,22 @@ export default function App() {
 
         <section className="panel panel-chat">
           <h3 className="panel-title">Chat</h3>
-          <div className="chat-log" ref={logRef}>
+          <div className="chat-log" ref={logRef} role="log" aria-live="polite" aria-label="LUNA conversation">
             {messages.map((m, i) => (
               <div key={i} className={`chat-msg chat-${m.from}`}>
                 {m.text}
               </div>
             ))}
           </div>
+          {approval && (
+            <div className="approval-card" role="alert">
+              <p><strong>Approval required:</strong> {approval.description}</p>
+              <div className="approval-actions">
+                <button type="button" disabled={approving} onClick={() => respondToApproval(false)}>Reject</button>
+                <button type="button" disabled={approving} onClick={() => respondToApproval(true)}>Review in native dialog</button>
+              </div>
+            </div>
+          )}
           <form className="chat-input" onSubmit={sendMessage}>
             <input
               value={draft}

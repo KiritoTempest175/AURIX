@@ -98,8 +98,10 @@ class SecondBrain:
     def _resolve(self, file: str) -> Path:
         """Resolve *file* relative to vault root; reject escapes."""
         resolved = (self.vault_path / file).resolve()
-        if not str(resolved).startswith(str(self.vault_path)):
-            raise ValueError(f"Path escapes vault boundary: {file}")
+        try:
+            resolved.relative_to(self.vault_path)
+        except ValueError as exc:
+            raise ValueError(f"Path escapes vault boundary: {file}") from exc
         return resolved
 
     # ── frontmatter helpers ───────────────────────────────────────────────

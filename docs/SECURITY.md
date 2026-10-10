@@ -1,29 +1,32 @@
-# LUNA Security Model & Hardening Specifications
+# AURIX security model — current implementation (October 2026)
 
-## 1. Zero-Network Air-Gapped Perimeter
-- LUNA operates completely on-device without outbound HTTP, WebSocket, or RPC connections.
-- All intra-process communication between Rust and Python occurs through shared memory (`Arc<AtomicBool>`, `Arc<AtomicU8>`) and PyO3 C-ABI bindings.
+## Scope
 
-## 2. Scoped Permissions & Action Categories
-Autonomous capabilities are strictly partitioned into scoped action categories:
-- `FILE_READ`: Sandboxed reading within `allowed_project_paths`.
-- `FILE_WRITE`: Sandboxed writing within `allowed_project_paths`.
-- `FILE_DELETE`: **Destructive** — Requires explicit user Trust Token authorization.
-- `SHELL_EXEC`: Sandboxed PTY execution (`cmd.exe /C` with `CREATE_NO_WINDOW`). High-risk commands (`rm`, `del`, `format`, `drop table`, `shutdown`) require Trust Token confirmation.
-- `CHECKPOINT_RESTORE`: **High Impact** — Requires Trust Token authorization.
-- `LOCAL_SEARCH`: Web-free local vector and filesystem retrieval.
+This file describes behavior in the committed code, not planned safeguards.
 
-## 3. Secret Scrubbing & Privacy Redaction
-Before any terminal output or user interaction is persisted into `execution_logs` or used in continuous training datasets, `security.secret_scrubber` passes the stream through regex and Shannon entropy analyzers:
-- Redacts OpenAI API keys (`sk-...`), GitHub tokens (`ghp_...`), AWS keys (`AKIA...`), Slack tokens (`xoxb-...`), and JWTs.
-- Strips private keys (`-----BEGIN RSA PRIVATE KEY-----`).
-- Redacts password parameters (`password=...`, `pwd=...`, `api_key=...`).
-- Identifies isolated high-entropy base64/hex strings exceeding Shannon entropy $\ge 4.3$.
+### Transport and trust
+- The current worker uses HTTP bound to `127.0.0.1:9721`, **not named pipes**.
+- The native Tauri process generates an unpredictable 256-bit session token for each startup and injects it into the Python child environment.
+- Every Python HTTP endpoint requires `Authorization: Bearer <session token>` and validates the `Host` header.
+- Browser `Origin` headers are rejected; the worker emits no permissive CORS headers. The React UI calls only native Tauri commands.
+- Request bodies have a 64 KiB limit and the server limits simultaneous request threads.
+- Trust previews are obtained from the worker by native Rust. The operating system displays the exact description in a Windows `MessageBoxW` confirmation before Tauri requests execution.
+- Pending action tokens in Python are fingerprint-bound and single-use; the entire approval design still requires penetration testing and native IPC replacement.
 
-## 4. Encryption at Rest (AES-256-GCM)
-- Model checkpoints, adapter weights, and optimizer states are encrypted at rest using AES-256-GCM.
-- Master keys are derived from local machine-anchored entropy via PBKDF2 (100,000 iterations).
+### Action restrictions
+- Model-generated generic shell commands are **disabled** until a constrained Windows sandbox is available. Disabling this tool reduces functional coverage.
+- Python FileSandbox limits access to the six normal Windows user folders and explicit configured workspace roots; recursive search remains unoptimized.
+- The vault path check uses `Path.relative_to` instead of unsafe string prefix matching.
+- Delete operations refuse permanent deletion when a recoverable Recycle Bin integration is absent.
+- The Tauri CSP is non-null and does not grant general internet sources.
 
-## 5. Append-Only Audit Trail
-- The SQLite table `security_audit_trails` records every sandbox query and Trust Token decision.
-- Immutability is enforced at the database layer via `BEFORE UPDATE` and `BEFORE DELETE` triggers that abort unauthorized tampering.
+### Remaining threats
+- The Python HTTP bridge, although authenticated, is not yet named-pipe IPC and its secret still resides in child-process environment.
+- The Python process and external UI-automation tools still execute with the user's operating-system privileges. No restricted token or Job Object is implemented.
+- The file tool's initial search strategy and all symlink/race conditions require hardening.
+- A full, persisted, cryptographically verifiable approval audit trail is not wired to the Tauri dialog.
+- Other modules retain legacy network/SMTP/Ollama paths. `offline_mode` is not an enforced network-control boundary.
+- Model weights, memory, and telemetry require an independent privacy audit. Git history may retain past tracked vault files.
+- CSP settings, Windows installer execution and network-level attacks have not been penetration-tested.
+
+**Recommendation:** Run only as a normal non-admin Windows user in a trusted environment, and review all native confirmations. Do not assume protection against malicious software running as the same OS user.
