@@ -50,3 +50,7 @@ No remaining item above should be advertised as production-ready.
 ### New scoped developer functions
 
 `ai_brain/developer_tools.py` implements typed `git_status`, `git_commit`, and `git_push` without shell interpolation. Workspaces are verified against configured roots; commit and publish are native-approval gated. Arbitrary code execution, package installation, and IDE-agent injection still need safe implementation and validation.
+
+### CI improvements
+
+The main pipeline now includes frontend Vitest telemetry tests and Python syntax compilation. A scheduled/manual security workflow includes Gitleaks, pip-audit, npm audit and cargo-audit; Dependabot configurations exist. CI is still being actively stabilized and the release workflow has not passed a clean Windows installer smoke test.

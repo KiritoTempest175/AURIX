@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { summarizeMetric } from "./utils/telemetry.mjs";
 
 // The session credential never enters JavaScript; only native commands can
 // access the authenticated Python worker.
@@ -60,9 +61,7 @@ function HistoryChart({ samples, metric }) {
   const valid = samples.filter((p) => typeof p[metric] === "number" && Number.isFinite(p[metric]));
   if (!valid.length) return <p>No measured history for this metric yet.</p>;
   const values = valid.map((p) => p[metric]);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const avg = values.reduce((sum, n) => sum + n, 0) / values.length;
+  const { min, max, avg } = summarizeMetric(valid, metric);
   const scale = Math.max(0.001, max - min);
   const polyline = valid.map((p, i) => {
     const x = valid.length === 1 ? 360 : (i / (valid.length - 1)) * 700 + 10;
