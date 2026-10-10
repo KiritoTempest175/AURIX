@@ -16,6 +16,7 @@ concurrency:
 
 permissions:
   contents: write  # only the installer workflow can publish preview release assets
+  actions: read  # inspect exact-commit CI/security status before publication
 jobs:
   bundle:
     if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[publish-preview]') }}
@@ -46,6 +47,34 @@ jobs:
             target/release/bundle/msi/*.msi
             installer-smoke.json
           if-no-files-found: error
+
+      - name: Require exact-commit CI and security success before publication
+        if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[publish-preview]')) }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($workflow in @('ci.yml', 'security.yml')) {
+            $deadline = (Get-Date).AddMinutes(45)
+            $passed = $false
+            do {
+              $json = gh api "repos/$env:GITHUB_REPOSITORY/actions/workflows/$workflow/runs?per_page=20&head_sha=$env:GITHUB_SHA"
+              if ($LASTEXITCODE -ne 0) { throw "Could not read $workflow checks" }
+              $runs = ($json | ConvertFrom-Json).workflow_runs
+              $check = $runs | Where-Object { $_.head_sha -eq $env:GITHUB_SHA -and $_.event -eq 'push' } | Select-Object -First 1
+              if ($check -and $check.status -eq 'completed') {
+                if ($check.conclusion -ne 'success') {
+                  throw "$workflow failed for this commit: $($check.conclusion)"
+                }
+                $passed = $true
+                break
+              }
+              Start-Sleep -Seconds 20
+            } while ((Get-Date) -lt $deadline)
+            if (-not $passed) { throw "Timed out waiting for $workflow success" }
+            Write-Host "$workflow succeeded at commit $env:GITHUB_SHA"
+          }
 
       # A preview release is published only for explicitly requested runs.
       # Push builds continue to produce CI artifacts without creating releases.
@@ -84,5 +113,21 @@ jobs:
           '@ | Set-Content -Path 'preview-release-notes.md' -Encoding utf8
           $paths = @($assets | ForEach-Object { $_.FullName })
           $paths += (Resolve-Path 'SHA256SUMS.txt').Path
+          $paths += (Resolve-Path 'installer-smoke.json').Path
           gh release create $tag @paths --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AURIX $tag — Windows Preview" --notes-file 'preview-release-notes.md' --prerelease --latest=false
           if ($LASTEXITCODE -ne 0) { throw "GitHub preview release creation failed" }
+
+      # The owner requires a main-only repository. The previous hardening PR
+      # was closed without merging because its GGUF-only runtime conflicts
+      # with the later explicit Ollama desktop requirement.
+      - name: Remove obsolete non-main branch after successful preview
+        if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[publish-preview]')) }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $branch = 'fix/release-hardening'
+          gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/git/refs/heads/$branch"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Branch cleanup did not complete; check the repository branch list."
+          }
