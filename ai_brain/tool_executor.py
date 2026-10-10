@@ -686,10 +686,8 @@ class ToolExecutor:
         if validation_error:
 
             logger.warning(
-                "Rejected malformed tool call: "
-                "tool=%s args=%s reason=%s",
+                "Rejected malformed tool call: tool=%s reason=%s",
                 tool_name,
-                args,
                 validation_error,
             )
 

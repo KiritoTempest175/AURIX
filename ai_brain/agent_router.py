@@ -216,9 +216,8 @@ class AgentRouter:
             args = {}
 
         logger.info(
-            "Agent decision: tool=%s args=%s",
+            "Agent decision: tool=%s",
             tool_name,
-            args,
         )
 
         # --------------------------------------------------------

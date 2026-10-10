@@ -114,13 +114,20 @@ export default function App() {
   const telemetry = useTelemetry();
   const [status, setStatus] = useState("standby");
   const [messages, setMessages] = useState([
-    { from: "aurix", text: "LUNA ready for text commands. Voice input is not connected in this build." },
+    { from: "aurix", text: "LUNA ready. Text works with a locally installed GGUF model. Offline speech needs a local Whisper model." },
   ]);
   const [draft, setDraft] = useState("");
   const logRef = useRef(null);
   const [approval, setApproval] = useState(null);
   const [workerOnline, setWorkerOnline] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [activeView, setActiveView] = useState("Command");
+  const [settings, setSettings] = useState(null);
+  const [memories, setMemories] = useState([]);
+  const [memoryKind, setMemoryKind] = useState("semantic");
+  const [memoryText, setMemoryText] = useState("");
+  const [memorySearch, setMemorySearch] = useState("");
+  const [memoryError, setMemoryError] = useState("");
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -142,12 +149,67 @@ export default function App() {
     return () => { active = false; clearInterval(pollId); };
   }, []);
 
-  // Never simulate captured speech or claim that microphone capture succeeded.
-  const handleMicPress = () => {
-    setMessages((items) => [
-      ...items,
-      { from: "aurix", text: "Voice input is not yet available. Use text chat." },
-    ]);
+  const loadMemories = useCallback(async () => {
+    if (!isTauri()) return;
+    try {
+      const data = await invoke("list_memories");
+      setMemories(data.items ?? []);
+      setMemoryError(data.enabled ? "" : "Memory is disabled. Opt in using [memory].enabled in config.toml.");
+    } catch (error) {
+      setMemoryError(String(error));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!workerOnline || !isTauri()) return;
+    invoke("get_ui_settings").then(setSettings).catch(() => setSettings(null));
+    if (activeView === "Memory") loadMemories();
+  }, [workerOnline, activeView, loadMemories]);
+
+  useEffect(() => {
+    // Emergency shortcut while AURIX has keyboard focus (not a global hotkey).
+    const keyDown = (event) => {
+      if (event.ctrlKey && event.shiftKey && event.code === "KeyX") {
+        event.preventDefault();
+        if (isTauri()) invoke("kill_actions").then((next) =>
+          setSettings((old) => ({ ...old, stopped: next.stopped }))
+        ).catch(() => {});
+      }
+    };
+    window.addEventListener("keydown", keyDown);
+    return () => window.removeEventListener("keydown", keyDown);
+  }, []);
+
+  const updateOffline = async () => {
+    try {
+      const next = await invoke("set_offline_mode", { enabled: !settings.offline });
+      setSettings((old) => ({ ...old, offline: next.offline }));
+    } catch (error) { setMemoryError(String(error)); }
+  };
+
+  const toggleStop = async () => {
+    try {
+      const next = await invoke(settings?.stopped ? "resume_actions" : "kill_actions");
+      setSettings((old) => ({ ...old, stopped: next.stopped }));
+    } catch (error) { setMemoryError(String(error)); }
+  };
+
+  const addFact = async (event) => {
+    event.preventDefault();
+    if (!memoryText.trim()) return;
+    try {
+      await invoke("add_memory", { kind: memoryKind, content: memoryText.trim() });
+      setMemoryText("");
+      await loadMemories();
+    } catch (error) { setMemoryError(String(error)); }
+  };
+
+  const deleteFact = async (id) => {
+    if (!window.confirm("Delete this stored memory permanently?")) return;
+    try {
+      await invoke("delete_memory", { id });
+      await loadMemories();
+    } catch (error) { setMemoryError(String(error)); }
   };
 
   const respondToApproval = async (accept) => {
@@ -177,45 +239,68 @@ export default function App() {
     }
   };
 
-  // --- Chat send (wired to Python AI brain) ---
-  const sendMessage = useCallback(
-    async (e) => {
-      e.preventDefault();
-      const text = draft.trim();
-      if (!text) return;
-
-      setMessages((m) => [...m, { from: "user", text }]);
-      setDraft("");
-      setStatus("processing");
-
-      try {
-        const data = await apiDispatch(text);
-        const reply = String(data.reply ?? "");
-        if (reply.startsWith("TRUST_TOKEN_REQUIRED:")) {
-          const [, id, ...description] = reply.split(":");
-          if (/^[a-f0-9]{12}$/i.test(id)) {
-            setApproval({ id, description: description.join(":") });
-            setMessages((m) => [...m, {
-              from: "aurix",
-              text: "This action requires your explicit confirmation.",
-            }]);
-          } else {
-            setMessages((m) => [...m, { from: "aurix", text: "Invalid approval request." }]);
-          }
+  // One path for typed messages and speech transcripts; never invent audio.
+  const sendText = useCallback(async (text) => {
+    const content = String(text || "").trim();
+    if (!content) return;
+    setMessages((m) => [...m, { from: "user", text: content }]);
+    setDraft("");
+    setStatus("processing");
+    try {
+      const data = await apiDispatch(content);
+      const reply = String(data.reply ?? "");
+      if (reply.startsWith("TRUST_TOKEN_REQUIRED:")) {
+        const [, id, ...description] = reply.split(":");
+        if (/^[a-f0-9]{12}$/i.test(id)) {
+          setApproval({ id, description: description.join(":") });
+          setMessages((m) => [...m, {
+            from: "aurix", text: "This action requires explicit native confirmation.",
+          }]);
         } else {
-          setMessages((m) => [...m, { from: "aurix", text: reply || "No response." }]);
+          setMessages((m) => [...m, { from: "aurix", text: "Invalid approval request." }]);
         }
-      } catch (err) {
-        setMessages((m) => [
-          ...m,
-          { from: "aurix", text: `Connection error: ${err.message}` },
-        ]);
-      } finally {
-        setStatus("standby");
+      } else {
+        setMessages((m) => [...m, { from: "aurix", text: reply || "No response." }]);
       }
-    },
-    [draft]
-  );
+    } catch (error) {
+      setMessages((m) => [...m, {
+        from: "aurix", text: `Error: ${String(error)}`,
+      }]);
+    } finally {
+      setStatus("standby");
+    }
+  }, []);
+
+  const sendMessage = async (event) => {
+    event.preventDefault();
+    if (status !== "standby") return;
+    await sendText(draft);
+  };
+
+  const handleMicPress = async () => {
+    if (status !== "standby") return;
+    if (!isTauri()) {
+      setMessages((m) => [...m, { from: "aurix", text: "Microphone requires the desktop app." }]);
+      return;
+    }
+    setStatus("listening");
+    try {
+      const data = await invoke("listen_voice");
+      if (data.text?.trim()) {
+        await sendText(data.text);
+      } else {
+        setMessages((m) => [...m, {
+          from: "aurix", text: "No speech detected; nothing was submitted.",
+        }]);
+      }
+    } catch (error) {
+      setMessages((m) => [...m, {
+        from: "aurix", text: `Voice unavailable: ${String(error)}`,
+      }]);
+    } finally {
+      setStatus("standby");
+    }
+  };
 
   const current = STATUS[status];
 
@@ -240,8 +325,8 @@ export default function App() {
         </div>
 
         <nav className="nav-list">
-          {["Command", "Activity Log", "Integrations", "System"].map((item, i) => (
-            <button key={item} className={`nav-item ${i === 0 ? "is-active" : ""}`} disabled={i !== 0} title={i === 0 ? "Command" : "Not yet implemented"}>
+          {["Command", "Memory", "System", "Activity"].map((item) => (
+            <button key={item} className={`nav-item ${activeView === item ? "is-active" : ""}`} onClick={() => setActiveView(item)} aria-current={activeView === item ? "page" : undefined}>
               <span className="nav-dot" />
               {item}
             </button>
@@ -270,7 +355,10 @@ export default function App() {
           </span>
         </header>
 
-        <div className="orb-wrap">
+
+        {activeView === "Command" ? (
+          <>
+                    <div className="orb-wrap">
           <div className={`orb ${status !== "standby" ? "orb-active" : ""}`}>
             <div className="orb-ring ring-1" />
             <div className="orb-ring ring-2" />
@@ -294,7 +382,7 @@ export default function App() {
           <button
             className={`mic-btn mic-${status}`}
             onClick={handleMicPress}
-            aria-label="Toggle listening"
+            aria-label="Transcribe microphone with local Whisper" disabled={status !== "standby"}
           >
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
               <path
@@ -314,6 +402,73 @@ export default function App() {
             {status === "processing" ? "Processing…" : current.label}
           </span>
         </div>
+
+          </>
+        ) : (
+          <section className="workspace-panel" aria-label={activeView}>
+            {activeView === "Memory" && (
+              <>
+                <h2>Encrypted memory</h2>
+                <p>Stored locally with AES-GCM and a Windows DPAPI-wrapped key. Memory is opt-in.</p>
+                {memoryError && <p role="alert">{memoryError}</p>}
+                {settings?.memory_enabled && (
+                  <>
+                    <form onSubmit={addFact} className="workspace-form">
+                      <select value={memoryKind} onChange={(e) => setMemoryKind(e.target.value)} aria-label="Memory type">
+                        {["semantic", "episodic", "procedural", "knowledge"].map((v) =>
+                          <option key={v} value={v}>{v}</option>)}
+                      </select>
+                      <textarea value={memoryText} onChange={(e) => setMemoryText(e.target.value)}
+                        maxLength={12000} rows={3} placeholder="Memory to save" aria-label="Memory content" />
+                      <button type="submit">Save memory</button>
+                    </form>
+                    <input className="workspace-search" placeholder="Filter recent memories"
+                      value={memorySearch} onChange={(e) => setMemorySearch(e.target.value)} />
+                    <div className="memory-list">
+                      {memories.filter((m) => m.content.toLowerCase().includes(memorySearch.toLowerCase()))
+                        .map((m) => (
+                          <article className="memory-item" key={m.id}>
+                            <span>{m.kind} · {new Date(m.created * 1000).toLocaleDateString()}</span>
+                            <p>{m.content}</p>
+                            <button onClick={() => deleteFact(m.id)}>Delete</button>
+                          </article>
+                        ))}
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+            {activeView === "System" && (
+              <>
+                <h2>System controls</h2>
+                <p>Worker: {workerOnline ? "Connected" : "Disconnected"}. Models need local files.</p>
+                <div className="setting-line">
+                  <div><strong>Offline mode</strong><p>Blocks the agent's network-capable tools while enabled.</p></div>
+                  <button onClick={updateOffline} disabled={!workerOnline || !settings}>
+                    {settings?.offline ? "Offline: ON" : "Offline: OFF"}
+                  </button>
+                </div>
+                <div className="setting-line">
+                  <div><strong>Emergency action block</strong><p>Prevents new tools; does not forcibly terminate in-progress OS operations. Shortcut: Ctrl+Shift+X in this window.</p></div>
+                  <button onClick={toggleStop} disabled={!workerOnline || !settings} className="stop-button">
+                    {settings?.stopped ? "Resume new actions" : "Block new actions"}
+                  </button>
+                </div>
+              </>
+            )}
+            {activeView === "Activity" && (
+              <>
+                <h2>Session activity</h2>
+                <p>Current conversation only; a persistent audited action timeline is still under development.</p>
+                <div className="memory-list">
+                  {messages.map((m, i) => <article className="memory-item" key={i}>
+                    <strong>{m.from === "user" ? "User" : "LUNA"}</strong><p>{m.text}</p>
+                  </article>)}
+                </div>
+              </>
+            )}
+          </section>
+        )}
       </main>
 
       {/* Right sidebar: status, telemetry, chat */}
@@ -373,6 +528,8 @@ export default function App() {
           )}
           <form className="chat-input" onSubmit={sendMessage}>
             <input
+              disabled={status !== "standby"}
+              aria-label="Message LUNA"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               placeholder="Message AURIX…"

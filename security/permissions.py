@@ -451,6 +451,10 @@ class PermissionManager:
             True,
         )
 
+        # Config cannot disable mandatory protection of dangerous actions.
+        # Users may tune only reversible operations; Tier-3 always prompts.
+        if category in self.HIGH_RISK_CATEGORIES or category == ActionCategory.EXTERNAL_COMMUNICATION:
+            return True
         if not security_enabled:
             return False
 

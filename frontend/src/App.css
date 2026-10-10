@@ -771,3 +771,41 @@ input {
   cursor: pointer;
 }
 .nav-item:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Functional desktop workspace panels */
+.workspace-panel {
+  width: min(100%, 700px);
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 10px;
+  color: var(--text);
+}
+.workspace-panel h2 { font-size: 23px; margin: 0 0 8px; }
+.workspace-panel p { line-height: 1.5; color: var(--text-dim); }
+.workspace-form { display:flex; flex-direction: column; gap: 10px; margin: 18px 0; }
+.workspace-form textarea, .workspace-form select, .workspace-search {
+  background: var(--panel-solid);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  width: 100%;
+  padding: 10px;
+  font-size: 13px;
+}
+.workspace-form button, .setting-line button, .memory-item button {
+  background: var(--panel-solid); color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: 8px;
+  cursor: pointer; padding: 9px 12px;
+}
+.memory-list { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+.memory-item { border: 1px solid var(--border); background: var(--panel); padding: 12px; border-radius: 9px; overflow-wrap: anywhere; }
+.memory-item span { color: var(--text-dim); font-size: 11px; }
+.memory-item p { white-space: pre-wrap; }
+.setting-line { display: flex; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid var(--border); padding: 20px 0; }
+.setting-line button { min-width: 126px; }
+.stop-button { border-color: var(--danger) !important; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+@media (max-width: 700px) {
+  .setting-line { flex-direction: column; align-items: flex-start; }
+}

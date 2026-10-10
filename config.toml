@@ -37,6 +37,12 @@ piper_speed = 1.00
 auto_tts_reply = true
 
 
+[voice]
+stt_model_path = "models/stt/whisper-base"
+record_seconds = 6
+sample_rate = 16000
+tts_enabled = false
+
 [memory]
 enabled = false # Opt-in; requires Windows DPAPI.
 max_retrieval_entries = 5

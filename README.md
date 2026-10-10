@@ -11,14 +11,15 @@ AURIX is an **experimental Windows desktop AI assistant**. The application UI is
 - Desktop application and file tool implementations with action-level permission requests.
 - Single-use, fingerprint-bound pending action tokens, with a Windows native confirmation dialog for requests made through the Tauri UI.
 - Session-secret-authenticated **localhost-only HTTP** between Tauri and the Python worker. Browser-origin requests and arbitrary hosts are rejected; JavaScript does not receive the token.
-- Encryption/checkpoint code, secret scrubbing, SQLite-based telemetry tools, Markdown memory management and automated Python/Rust tests.
+- Encryption/checkpoint code, secret scrubbing, SQLite-based telemetry tools, and automated Python/Rust tests.
+- Opt-in AES-GCM encrypted SQLite memory and Windows DPAPI key storage, with a basic Memory Explorer panel.
 - The guarded StudentTrainingController now starts an actual QLoRA subprocess only when the workstation is idle and plugged in, CUDA and training dependencies are available, and a local dataset exists. It reports real process status, not simulated progress. Its training results have not been independently evaluated.
 
 ## Not yet implemented or validated
 
 - A bundled Python sidecar, one-click standalone installer, auto-updater, full first-run onboarding.
 - Authenticated Windows named-pipe IPC; the loopback HTTP transport is temporary.
-- A real microphone-connected voice control button in the React UI. It explicitly reports unavailability rather than simulated captured speech.
+- Always-on wake-word detection and interruptible voice playback. Push-to-talk now uses an optional local Whisper model when installed, otherwise reports unavailability.
 - A Windows restricted-token/Job-Object command sandbox; model-generated `shell_exec` is **disabled** until this exists.
 - The active agent router uses lazy, local GGUF inference through optional `llama-cpp-python`. Model weights and the native library are not bundled. Legacy Transformers/Ollama code remains in the repository but is not used by the default router.
 - A verified 6 GB **per-application** VRAM / 12 GB RAM hard cap, GPU history charts, idle <150 MB resource guarantee, and complete evaluated training.

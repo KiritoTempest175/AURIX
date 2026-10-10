@@ -178,6 +178,75 @@ async fn execute_trust(payload: TrustRequest, state: State<'_, BridgeState>) -> 
     result.json().await.map_err(|_| "Invalid action result".to_string())
 }
 
+
+// Native-only application APIs. All use the confidential session bearer;
+// the renderer can never send arbitrary URLs or read the secret.
+async fn local_get(state: &BridgeState, route: &str) -> Result<serde_json::Value, String> {
+    let res = state.client.get(format!("{BRIDGE_URL}{route}"))
+        .bearer_auth(&state.token).send().await
+        .map_err(|_| "Private worker unavailable".to_string())?;
+    check_response(res.status())?;
+    res.json().await.map_err(|_| "Invalid private worker response".to_string())
+}
+
+async fn local_post(
+    state: &BridgeState,
+    route: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let res = state.client.post(format!("{BRIDGE_URL}{route}"))
+        .bearer_auth(&state.token).json(&body).send().await
+        .map_err(|_| "Private worker unavailable".to_string())?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let body: serde_json::Value = res.json().await.unwrap_or_default();
+        let code = body.get("error").and_then(|x| x.as_str()).unwrap_or("REQUEST_FAILED");
+        return Err(format!("{} (HTTP {})", code, status.as_u16()));
+    }
+    res.json().await.map_err(|_| "Invalid private worker response".to_string())
+}
+
+#[tauri::command]
+async fn get_ui_settings(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    local_get(&state, "/settings").await
+}
+
+#[tauri::command]
+async fn set_offline_mode(enabled: bool, state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    local_post(&state, "/settings", serde_json::json!({"offline": enabled})).await
+}
+
+#[tauri::command]
+async fn list_memories(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    local_get(&state, "/memory").await
+}
+
+#[tauri::command]
+async fn add_memory(kind: String, content: String, state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    if content.len() > 12000 { return Err("Memory text too long".into()); }
+    local_post(&state, "/memory", serde_json::json!({"action":"add","kind":kind,"content":content})).await
+}
+
+#[tauri::command]
+async fn delete_memory(id: String, state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    local_post(&state, "/memory", serde_json::json!({"action":"delete","id":id})).await
+}
+
+#[tauri::command]
+async fn listen_voice(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    local_post(&state, "/voice/transcribe", serde_json::json!({})).await
+}
+
+#[tauri::command]
+async fn kill_actions(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    local_post(&state, "/kill", serde_json::json!({})).await
+}
+
+#[tauri::command]
+async fn resume_actions(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    local_post(&state, "/resume", serde_json::json!({})).await
+}
+
 fn main() {
     let token = secret();
     let child = discover_root().and_then(|root| spawn_bridge(&root, &token));
@@ -187,7 +256,9 @@ fn main() {
         .manage(SysState(Mutex::new(System::new_all())))
         .manage(BridgeState { token, process: Mutex::new(child), client })
         .invoke_handler(tauri::generate_handler![
-            get_telemetry, get_bridge_telemetry, get_bridge_health, send_message, execute_trust
+            get_telemetry, get_bridge_telemetry, get_bridge_health, send_message, execute_trust,
+            get_ui_settings, set_offline_mode, list_memories, add_memory, delete_memory,
+            listen_voice, kill_actions, resume_actions
         ])
         .run(tauri::generate_context!())
         .expect("error while running AURIX");

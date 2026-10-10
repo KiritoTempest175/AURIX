@@ -171,6 +171,7 @@ class MemoryStore:
     def clear(self):
         with self.lock, self._connect() as conn:
             conn.execute("DELETE FROM memories")
+        with self.lock, self._connect() as conn:
             conn.execute("VACUUM")
 
 

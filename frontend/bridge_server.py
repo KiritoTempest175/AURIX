@@ -126,9 +126,32 @@ class BridgeHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             return self._json({"error": "UNAUTHORIZED"}, 401)
         if self.path == "/health":
-            return self._json({"status": "ok", "model": "not-verified"})
+            try:
+                from ai_engine.inference.local_gguf import get_default_local_runner
+                runner = get_default_local_runner()
+                return self._json({
+                    "status": "ok", "model_ready": runner.is_available,
+                    "model_loaded": runner._model is not None,
+                    "backend": runner.backend,
+                })
+            except Exception:
+                return self._json({"status": "ok", "model_ready": False, "model_loaded": False})
         if self.path == "/telemetry":
             return self._json(telemetry())
+        if self.path == "/settings":
+            from security.action_control import offline_mode, action_is_stopped
+            from ai_brain.secure_memory import memory_enabled
+            return self._json({"offline": offline_mode(), "stopped": action_is_stopped(),
+                               "memory_enabled": memory_enabled()})
+        if self.path == "/memory":
+            from ai_brain.secure_memory import memory_enabled, get_memory_store
+            if not memory_enabled():
+                return self._json({"enabled": False, "items": []})
+            try:
+                return self._json({"enabled": True, "items": get_memory_store().list(100)})
+            except Exception:
+                LOG.exception("Memory could not be accessed")
+                return self._json({"error": "MEMORY_UNAVAILABLE"}, 503)
         self._json({"error": "NOT_FOUND"}, 404)
 
     def do_POST(self):
@@ -141,6 +164,53 @@ class BridgeHandler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeError, json.JSONDecodeError):
             return self._json({"error": "INVALID_JSON"}, 400)
 
+        if self.path == "/kill":
+            from security.action_control import stop_actions
+            stop_actions()
+            return self._json({"stopped": True, "note": "new actions blocked"})
+        if self.path == "/resume":
+            from security.action_control import resume_actions
+            resume_actions()
+            return self._json({"stopped": False})
+        if self.path == "/settings":
+            from security.action_control import set_offline_mode
+            if not isinstance(data.get("offline"), bool):
+                return self._json({"error": "INVALID_SETTINGS"}, 400)
+            return self._json({"offline": set_offline_mode(data["offline"])})
+        if self.path == "/memory":
+            from ai_brain.secure_memory import memory_enabled, get_memory_store, KINDS
+            if not memory_enabled():
+                return self._json({"error": "MEMORY_DISABLED"}, 403)
+            try:
+                store = get_memory_store()
+                action = data.get("action")
+                if action == "add":
+                    kind, content = data.get("kind"), data.get("content")
+                    if kind not in KINDS or not isinstance(content, str):
+                        return self._json({"error": "INVALID_MEMORY"}, 400)
+                    return self._json({"id": store.add(kind, content)})
+                if action == "delete":
+                    key = data.get("id")
+                    if not isinstance(key, str) or len(key) != 32 or not all(c in "0123456789abcdef" for c in key):
+                        return self._json({"error": "INVALID_MEMORY_ID"}, 400)
+                    return self._json({"deleted": store.delete(key)})
+                return self._json({"error": "INVALID_ACTION"}, 400)
+            except ValueError:
+                return self._json({"error": "INVALID_MEMORY"}, 400)
+            except Exception:
+                LOG.exception("Memory operation failed")
+                return self._json({"error": "MEMORY_UNAVAILABLE"}, 503)
+        if self.path == "/voice/transcribe":
+            try:
+                from native_ui.audio.offline_voice import transcribe_microphone
+                return self._json({"text": transcribe_microphone()})
+            except RuntimeError as exc:
+                reason = str(exc)
+                code = reason if reason in {"NO_STT_MODEL", "VOICE_BUSY", "VOICE_DEPENDENCY_MISSING"} else "VOICE_UNAVAILABLE"
+                return self._json({"error": code}, 503)
+            except Exception:
+                LOG.exception("Local STT failed")
+                return self._json({"error": "VOICE_UNAVAILABLE"}, 503)
         if self.path not in ("/dispatch", "/trust_preview", "/execute_trust"):
             return self._json({"error": "NOT_FOUND"}, 404)
 
@@ -175,11 +245,24 @@ def main():
         raise SystemExit("Bridge requires a Tauri-generated session secret")
     server = SecureServer(("127.0.0.1", 9721), BridgeHandler, token)
     LOG.info("Private bridge running on 127.0.0.1 (authenticated)")
+    def reap_idle_model():
+        while not stop_reaper.wait(10.0):
+            if _dispatcher is not None:
+                runner = getattr(_dispatcher.router, "_runner", None)
+                if runner is not None and hasattr(runner, "unload_if_idle"):
+                    try:
+                        runner.unload_if_idle()
+                    except Exception:
+                        LOG.exception("Could not release idle model")
+    stop_reaper = threading.Event()
+    reaper = threading.Thread(target=reap_idle_model, name="model-unloader", daemon=True)
+    reaper.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        stop_reaper.set()
         server.server_close()
 
 
