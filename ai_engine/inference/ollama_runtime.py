@@ -249,7 +249,7 @@ def get_model_runner():
     """Resolve selection on each access so changing model takes effect live."""
     global _RUNNER
     picked = selection()
-     with _LOCK:
+    with _LOCK:
         if _RUNNER is None or _RUNNER.model_name != picked["model"]:
             _RUNNER = OllamaRunner(picked["model"])
         return _RUNNER
