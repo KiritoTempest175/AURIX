@@ -452,6 +452,14 @@ class ToolExecutor:
                     "before I can send the email."
                 )
 
+            from ai_brain.email_control import draft_is_complete
+            if not draft_is_complete(body):
+                return (
+                    "Draft not sent: the email contains placeholders or unfinished "
+                    "project fields. LUNA needs a complete proposal draft "
+                    "before requesting permission."
+                )
+
             args.setdefault(
                 "subject",
                 "",
