@@ -12,7 +12,7 @@ AURIX is an **experimental Windows desktop AI assistant**. The application UI is
 - Single-use, fingerprint-bound pending action tokens, with a Windows native confirmation dialog for requests made through the Tauri UI.
 - Session-secret-authenticated **localhost-only HTTP** between Tauri and the Python worker. Browser-origin requests and arbitrary hosts are rejected; JavaScript does not receive the token.
 - Encryption/checkpoint code, secret scrubbing, SQLite-based telemetry tools, Markdown memory management and automated Python/Rust tests.
-- QLoRA training code exists, **but the currently exposed StudentTrainingController still simulates training**; it does not constitute proof of active learning.
+- The guarded StudentTrainingController now starts an actual QLoRA subprocess only when the workstation is idle and plugged in, CUDA and training dependencies are available, and a local dataset exists. It reports real process status, not simulated progress. Its training results have not been independently evaluated.
 
 ## Not yet implemented or validated
 
@@ -20,7 +20,7 @@ AURIX is an **experimental Windows desktop AI assistant**. The application UI is
 - Authenticated Windows named-pipe IPC; the loopback HTTP transport is temporary.
 - A real microphone-connected voice control button in the React UI. It explicitly reports unavailability rather than simulated captured speech.
 - A Windows restricted-token/Job-Object command sandbox; model-generated `shell_exec` is **disabled** until this exists.
-- Embedded GGUF/llama.cpp-only model runtime; current code still uses Transformers and has legacy Ollama adapter code.
+- The active agent router uses lazy, local GGUF inference through optional `llama-cpp-python`. Model weights and the native library are not bundled. Legacy Transformers/Ollama code remains in the repository but is not used by the default router.
 - A verified 6 GB **per-application** VRAM / 12 GB RAM hard cap, GPU telemetry integration, idle <150 MB resource guarantee, and live training.
 - Complete role-based tool SDK, rollback/undo, persistent native approval audit, memory explorer, signed installer, and independent security assessment.
 - Online communications and software-installation workflows require explicit review; no guarantee is made that every action is fully offline.
@@ -29,7 +29,7 @@ See [implementation status](docs/IMPLEMENTATION_STATUS.md) and [security model](
 
 ## Requirements
 
-Windows 10/11, Python 3.10+, Node.js 22+, a compatible Rust toolchain and the Tauri Windows prerequisites. Model inference, speech and GPU training have their own optional native/dependency requirements. CPU-only fallback is limited and may use deterministic responses; it is **not** a substitute for a real local LLM.
+Windows 10/11, Python 3.10+, Node.js 22+, a compatible Rust toolchain and the Tauri Windows prerequisites. Model inference, speech and GPU training have their own optional native/dependency requirements. CPU-only inference requires a compatible local GGUF model and `llama-cpp-python`. Missing weights or dependencies produce a clear error, not a fake LLM response.
 
 ## Development setup
 
@@ -39,6 +39,8 @@ cd AURIX
 py -3.10 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
+# Install llama-cpp-python with a compatible CPU/CUDA wheel from a trusted distributor.
+# Place a verified local GGUF model at config.toml [llm].model_path.
 cd frontend
 npm install
 npm run tauri dev
@@ -58,7 +60,7 @@ Do **not** enable public binding for the Python bridge. Its token is generated a
 
 ## Configuration
 
-`config.toml` is the active file for the central tool executor. Configure `security.allowed_project_paths` for workspace access. Empty trusted roots mean writes require explicit authorization and other Python file reads remain restricted to standard user folders. Legacy modules still contain other configuration defaults; consolidation is not finished.
+`config.toml` is the active file for the tool executor and lazy GGUF model runtime; it does not auto-download weights. Configure `security.allowed_project_paths` for workspace access. Empty trusted roots mean writes require explicit authorization and other Python file reads remain restricted to standard user folders. Legacy modules still contain other configuration defaults; consolidation is not finished.
 
 The current `[general].offline_mode` key is informational until every network-capable tool has been migrated to a central network policy. Do not treat this flag as a verified network isolation switch.
 

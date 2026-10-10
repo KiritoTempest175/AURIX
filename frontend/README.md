@@ -1,6 +1,6 @@
 # AURIX desktop shell
 
-React 18 + Vite + Tauri 2 interface for the LUNA agent. The **native** Tauri process owns the session credential used to reach the Python loopback worker. The browser preview is a UI-only environment; it cannot invoke desktop actions.
+React 18 + Vite + Tauri 2 interface for the LUNA agent. The **native** Tauri process owns the session credential used to reach the Python loopback worker. The agent runner loads a user-provided GGUF file lazily without cloud APIs. The browser preview is a UI-only environment; it cannot invoke desktop actions.
 
 ## Development
 

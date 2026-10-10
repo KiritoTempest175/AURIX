@@ -93,7 +93,7 @@ struct BridgeTelemetry { cpu: Option<f64>, ram: Option<f64>, gpu: Option<f64>, g
 struct TrustRequest { request: String }
 #[derive(Deserialize)]
 struct TrustPreview { description: Option<String>, error: Option<String> }
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct TrustResponse { result: String }
 
 #[tauri::command]

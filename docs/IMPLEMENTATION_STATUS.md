@@ -12,7 +12,7 @@ Updated: 2026-10-10. Status is based on code changes, not an executed Windows pe
 | H-04 | Partially fixed | Remove current vault files, update `.gitignore`, `docs/PRIVACY_HISTORY.md`; rewrite Git history independently |
 | H-05 | Open | `frontend/src-tauri/src/main.rs`: removed hardcoded E:/ path, but packaged sidecar is not bundled |
 | H-06 | Mitigated | `frontend/src-tauri/tauri.conf.json`: references only committed icon.ico; produce full image asset set later |
-| H-07 | Open | `ai_engine/training/student_qlora_loop.py`: simulated controller must be replaced with real training |
+| H-07 | Partially mitigated | `ai_engine/training/student_qlora_loop.py` now launches a real gated QLoRA subprocess and reports exit status; model evaluation and metrics remain unverified |
 | H-08 | Partially fixed | `core_engine/src/governor/monitor.rs`: corrected 102 typo and 12/6 GiB constants; load limits from validated config and measure app allocation |
 | H-09 | Partially fixed | `frontend/src/App.jsx`: approval preview + Rust native confirmation; persistent audit and expiry visualization remain |
 | H-10 | Fixed in source | Tauri CSP enabled in `frontend/src-tauri/tauri.conf.json`; review final policies with packaged app |
@@ -36,13 +36,13 @@ Updated: 2026-10-10. Status is based on code changes, not an executed Windows pe
 
 ## Platform commitments still outstanding
 
-- Embedded GGUF/llama.cpp runtime without external servers or Ollama.
+- A bundled, validated GGUF/llama.cpp runtime; optional local-only `ai_engine/inference/local_gguf.py` now runs the default model path without cloud/Ollama.
 - Lazy wake-word/STT/TTS pipeline and interruptible speech.
 - Measured near-zero idle resources and hard per-process VRAM limits.
 - Rust telemetry history and CSV exports.
 - Full git/software installation/IDE/email/WhatsApp action set with risk tiers.
 - Encrypted searchable second brain and memory-management UI.
-- Real and evaluated QLoRA adapter lifecycle.
+- Evaluated QLoRA adapters with genuine loss/progress reporting and rollback, beyond the gated training subprocess.
 - Signed single installer, updater, system tray, global kill switch and accessibility audit.
 
 No remaining item above should be advertised as production-ready.

@@ -6,10 +6,7 @@ import logging
 from typing import Optional, Tuple
 
 from ai_brain.tool_executor import ToolExecutor
-from ai_engine.inference.gemma_e4b import (
-    GemmaModelRunner,
-    get_default_gemma_runner,
-)
+from ai_engine.inference.local_gguf import LocalGGUFRunner, get_default_local_runner
 
 logger = logging.getLogger(
     "aurix.ai_brain.agent_router"
@@ -48,7 +45,7 @@ class AgentRouter:
     def __init__(
         self,
         executor: Optional[ToolExecutor] = None,
-        model_runner: Optional[GemmaModelRunner] = None,
+        model_runner: Optional[LocalGGUFRunner] = None,
     ) -> None:
 
         self.executor = (
@@ -80,13 +77,13 @@ class AgentRouter:
     # ============================================================
 
     @property
-    def runner(self) -> GemmaModelRunner:
+    def runner(self) -> LocalGGUFRunner:
         """Return the shared AURIX reasoning model."""
 
         if self._runner is None:
 
             self._runner = (
-                get_default_gemma_runner()
+                get_default_local_runner()
             )
 
         return self._runner

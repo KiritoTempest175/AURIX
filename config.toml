@@ -57,6 +57,13 @@ log_file = "logs/aurix_session.log"
 
 
 [llm]
+# Local GGUF model file, shipped separately by the user.
+backend = "llama_cpp"
+model_path = "models/gemma-3n-E4B-it-Q4_K_M.gguf"
+fallback_model_path = ""
+n_ctx = 2048
+n_gpu_layers = 0 # CPU-safe default; opt in to GPU only after measuring VRAM.
+model_unload_after_seconds = 120
 
 model_name = "google/gemma-4-E4B-it" # legacy Transformers path; GGUF runtime pending
 model_alias = "Gemma 4 E4B (4-bit NF4, GPU)"

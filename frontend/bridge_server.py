@@ -36,6 +36,11 @@ def dispatcher():
 
 
 def telemetry() -> dict:
+    # Release an idle GGUF model without loading it merely to serve telemetry.
+    if _dispatcher is not None:
+        runner = getattr(_dispatcher.router, "_runner", None)
+        if runner is not None and hasattr(runner, "unload_if_idle"):
+            runner.unload_if_idle()
     try:
         import psutil
         return {

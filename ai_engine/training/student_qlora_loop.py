@@ -14,6 +14,9 @@ from __future__ import annotations
 import gc
 import logging
 import os
+import subprocess
+import sys
+from pathlib import Path
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -204,36 +207,87 @@ class StudentTrainingController:
 
         self.current_step = 0
         self.current_rank = active_lora_rank
-        self.current_loss = 0.0
+        self.current_loss = None  # Only an actual training callback may report loss.
+        self.last_error: Optional[str] = None
+        self.last_exit_code: Optional[int] = None
+        self._training_process: Optional[subprocess.Popen] = None
 
     @property
     def is_running(self) -> bool:
         return self._is_training_running
 
     def start_training(self) -> bool:
-        """Start the background training thread if not already active."""
+        """Launch the *real* QLoRA trainer; refuse if preconditions are missing.
+
+        No synthetic progress, mock weights, or simulated evaluation losses.
+        A runner can be launched only on an idle workstation with CUDA.
+        """
         if self._is_training_running:
-            logger.warning("Student training is already running.")
+            self.last_error = "Training is already running"
+            return False
+        if self.get_power_state_fn() not in (1, 2):
+            self.last_error = "Training requires confirmed IDLE or LOCKED state"
+            return False
+        try:
+            import psutil
+            battery = psutil.sensors_battery()
+            if battery is not None and not battery.power_plugged:
+                self.last_error = "Training requires external power"
+                return False
+        except ImportError:
+            self.last_error = "Cannot confirm system power state without psutil"
+            return False
+
+        if not TORCH_AVAILABLE or torch is None or not torch.cuda.is_available():
+            self.last_error = "Training requires a CUDA-capable GPU"
+            return False
+        if get_unsloth_backend() is None or not TRL_AVAILABLE:
+            self.last_error = "Unsloth and TRL training backends must be installed"
+            return False
+        project_root = Path(__file__).resolve().parents[2]
+        dataset = project_root / "data_pipeline/storage/telemetry.jsonl"
+        if not dataset.is_file() or dataset.stat().st_size == 0:
+            self.last_error = "No non-empty training dataset is available"
             return False
 
         self._stop_requested.clear()
+        self.last_error = None
+        self.last_exit_code = None
+        # Offline flags protect against unrequested model downloads.
+        env = os.environ.copy()
+        env.update({"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"})
+        try:
+            self._training_process = subprocess.Popen(
+                [sys.executable, "-m", "ai_engine.training.qlora_loop"],
+                cwd=str(project_root),
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            self.last_error = f"Unable to start local training process: {type(exc).__name__}"
+            return False
         self._is_training_running = True
-        self._training_thread = threading.Thread(target=self._run_training_worker, daemon=True, name="LunaStudentTrainer")
+        self._training_thread = threading.Thread(
+            target=self._run_training_worker, daemon=True, name="LunaStudentTrainerMonitor"
+        )
         self._training_thread.start()
-        logger.info("Student-5B continuous training loop started.")
         return True
 
     def stop_training(self) -> bool:
-        """Request graceful halt of background training."""
-        if not self._is_training_running:
+        """Terminate the owned local training worker and wait for exit."""
+        process = self._training_process
+        if not self._is_training_running or process is None:
             return False
-
-        logger.info("Stopping Student-5B training gracefully...")
         self._stop_requested.set()
-        if self._training_thread and self._training_thread.is_alive():
-            self._training_thread.join(timeout=5.0)
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+        self.last_exit_code = process.returncode
         self._is_training_running = False
-        logger.info("Student-5B training stopped.")
         return True
 
     def resume_from_latest_checkpoint(
@@ -280,12 +334,14 @@ class StudentTrainingController:
         return manifest
 
     def get_status(self) -> Dict[str, Any]:
-        """Return live telemetry metrics for UI dashboard."""
+        """Report only observable training state; no invented progress."""
         return {
             "is_running": self._is_training_running,
-            "current_step": self.current_step,
-            "active_rank": self.current_rank,
-            "current_loss": self.current_loss,
+            "current_step": None,
+            "active_rank": None,
+            "current_loss": None,
+            "last_error": self.last_error,
+            "last_exit_code": self.last_exit_code,
             "checkpoint_dir": str(self.checkpoint_dir),
             "model_name": self.base_model_name,
             "live_interaction_weight": self.live_interaction_weight,
@@ -293,58 +349,15 @@ class StudentTrainingController:
         }
 
     def _run_training_worker(self) -> None:
-        """Worker loop simulating or executing continuous fine-tuning steps."""
-        # Attempt to resume from existing latest checkpoint on worker startup
-        latest = self.checkpoint_manager.load_latest_checkpoint()
-        if latest is not None:
-            _, manifest, extra_state = latest
-            self.current_step = manifest.step_count
-            self.current_rank = manifest.lora_rank
-            if manifest.eval_loss is not None:
-                self.current_loss = manifest.eval_loss
-            if extra_state and TORCH_AVAILABLE and torch is not None and "rng_state" in extra_state:
-                try:
-                    rng_bytes = torch.ByteTensor(extra_state["rng_state"])
-                    torch.random.set_rng_state(rng_bytes)
-                except Exception:
-                    pass
-            logger.info(f"Worker resumed from checkpoint {manifest.checkpoint_id} at step {self.current_step}")
-
-        step = self.current_step
-        while not self._stop_requested.is_set():
-            time.sleep(2.0)
-            step += 1
-            self.current_step = step
-            self.current_loss = max(0.12, 1.85 - (step * 0.01))
-
-            # Query live governor state dynamically (fail-closed: generate only if confirmed IDLE or LOCKED)
-            live_power_state = self.get_power_state_fn()
-            if live_power_state in (1, 2):
-                logger.info(
-                    f"Governor confirmed idle state ({live_power_state}): triggering idle general synthetic generation."
-                )
-                try:
-                    self.synthetic_generator.generate_batch(count=1, power_state=live_power_state, persist=True)
-                except Exception as e:
-                    logger.warning(f"Background idle synthetic generation encountered issue: {e}")
-
-            # Simulate periodic checkpoint persistence every 25 steps
-            if step % 25 == 0:
-                mock_weights = f"MOCK_LUNA_STUDENT_WEIGHTS_STEP_{step}".encode("utf-8")
-                mock_extra_state = {
-                    "optimizer_state": {"step": step, "lr": 0.0002},
-                    "rng_seed": 42 + step,
-                }
-                self.checkpoint_manager.save_checkpoint(
-                    weights_data=mock_weights,
-                    step_count=step,
-                    dataset_version_hash=f"dataset_v1_step_{step}",
-                    lora_rank=self.current_rank,
-                    eval_loss=self.current_loss,
-                    extra_state=mock_extra_state,
-                )
-                logger.info(f"Student-5B checkpoint persisted at step {step} (loss: {self.current_loss:.4f})")
-
+        """Monitor the actual subprocess; never simulate a training step."""
+        process = self._training_process
+        if process is None:
+            self._is_training_running = False
+            self.last_error = "Training process was not launched"
+            return
+        self.last_exit_code = process.wait()
+        if self.last_exit_code != 0 and not self._stop_requested.is_set():
+            self.last_error = f"QLoRA process exited with code {self.last_exit_code}"
         self._is_training_running = False
 
 
