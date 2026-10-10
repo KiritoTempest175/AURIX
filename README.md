@@ -109,3 +109,7 @@ python scripts/import_model.py C:\\models\\approved.gguf --sha256 YOUR_VERIFIED_
 ```
 
 The importer checks SHA-256 before copying into the per-user models directory. Update `[llm].model_path` to match the imported file.
+
+## Scoped Git operations
+
+LUNA can inspect Git status, commit files that the user has **already staged**, and push the currently checked-out branch to `origin` in an explicitly trusted project. Configure a single `security.allowed_project_paths` root for commands like "push it" without a path; multiple configured projects require clarification. Git commit and push require native approval; force-push and general shell execution remain disabled. Online push is blocked in Offline Mode. No agent command automatically stages the entire repository, because this could include secrets.

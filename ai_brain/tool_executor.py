@@ -33,6 +33,7 @@ from ai_brain.media_player import MediaPlayer
 from ai_brain.message_control import WhatsAppController
 from ai_brain.web_search import WebSearcher
 from ai_brain.youtube_video import youtube_video
+from ai_brain.developer_tools import DeveloperTools
 
 from security.permissions import (
     PermissionManager,
@@ -112,6 +113,7 @@ class ToolExecutor:
             interactive_confirmations=False
         )
 
+        self.developer = DeveloperTools(self.config)
         self.email = EmailController()
 
         self.whatsapp = WhatsAppController(
@@ -253,6 +255,9 @@ class ToolExecutor:
             "move_item",
             "rename_item",
             "shell_exec",
+            "git_status",
+            "git_commit",
+            "git_push",
         }
 
     def _validate_args(
@@ -342,6 +347,9 @@ class ToolExecutor:
 
             "shell_exec":
                 ("command",),
+            "git_status": (),
+            "git_commit": (),
+            "git_push": (),
         }
 
         missing = [
@@ -383,6 +391,9 @@ class ToolExecutor:
             "destination",
             "new_name",
             "command",
+            "repo",
+            "branch",
+            "message",
             "action",
             "service",
             "url",
@@ -628,6 +639,27 @@ class ToolExecutor:
                 args["append"] = bool(
                     append
                 )
+
+        # --------------------------------------------------------
+        # GIT: resolve the exact allowlisted project/branch before approval.
+        # --------------------------------------------------------
+        if tool_name in {"git_status", "git_commit", "git_push"}:
+            try:
+                repo = self.developer.repo(clean_string("repo"))
+                args["repo"] = str(repo)
+                if tool_name == "git_push":
+                    args["branch"] = self.developer.active_branch(str(repo))
+                if tool_name == "git_commit" and not clean_string("message"):
+                    staged = self.developer._run(repo, ["diff", "--cached", "--name-only"])
+                    names = [name for name in staged.splitlines() if name.strip()]
+                    if not names:
+                        return "Nothing staged for committing; stage specific files first."
+                    args["message"] = (
+                        f"Update {names[0]}" if len(names) == 1
+                        else f"Update {len(names)} staged files"
+                    )
+            except (PermissionError, ValueError, RuntimeError) as error:
+                return str(error)
 
         # --------------------------------------------------------
         # SAFE DEFAULTS
@@ -1086,6 +1118,12 @@ class ToolExecutor:
 
             "shell_exec":
                 ActionCategory.SHELL_EXEC,
+            "git_status":
+                ActionCategory.FILE_READ,
+            "git_commit":
+                ActionCategory.SYSTEM_SETTING,
+            "git_push":
+                ActionCategory.EXTERNAL_COMMUNICATION,
         }
 
         return mapping[
@@ -1164,6 +1202,8 @@ class ToolExecutor:
             return (
                 f"command={args.get('command', '')}"
             )
+        if tool_name in {"git_status", "git_commit", "git_push"}:
+            return f"repo={args.get('repo', '')}|branch={args.get('branch', '')}"
 
         if tool_name in {
             "list_directory",
@@ -1203,6 +1243,13 @@ class ToolExecutor:
         tool_name: str,
         args: Dict[str, Any],
     ) -> str:
+
+        if tool_name == "git_push":
+            return f"Push repository {args.get('repo')} branch {args.get('branch')} to origin (no force)"
+        if tool_name == "git_commit":
+            return f"Commit staged files in {args.get('repo')} with message: {args.get('message')}"
+        if tool_name == "git_status":
+            return f"Inspect Git status in {args.get('repo')}"
 
         if tool_name == "delete_item":
 
@@ -1331,6 +1378,13 @@ class ToolExecutor:
         tool: str,
         args: Dict[str, Any],
     ) -> str:
+
+        if tool == "git_status":
+            return self.developer.status(str(args.get("repo", "")))
+        if tool == "git_commit":
+            return self.developer.commit(str(args.get("repo", "")), str(args.get("message", "")))
+        if tool == "git_push":
+            return self.developer.push(str(args.get("repo", "")), str(args.get("branch", "")))
 
         # --------------------------------------------------------
         # APP CONTROL

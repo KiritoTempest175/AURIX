@@ -166,6 +166,22 @@ TOOLS = [
     },
 
     {
+        "name": "git_status",
+        "description": "Check the currently configured trusted Git project and its working tree status.",
+        "parameters": {"repo": "optional string, configured trusted repository"},
+    },
+    {
+        "name": "git_commit",
+        "description": "Commit already-staged files with a concise message; requires native approval.",
+        "parameters": {"repo": "optional trusted repository", "message": "optional concise message"},
+    },
+    {
+        "name": "git_push",
+        "description": "Push the active branch of one trusted repository to origin; requires native approval.",
+        "parameters": {"repo": "optional trusted repository"},
+    },
+
+    {
         "name": "general_answer",
         "description": (
             "Use for normal conversation, questions, explanations and reasoning "

@@ -46,3 +46,7 @@ Updated: 2026-10-10. Status is based on code changes, not an executed Windows pe
 - Verified signed Windows installer, updater, system tray, OS-level kill switch and accessibility audit. A manual unsigned preview script exists.
 
 No remaining item above should be advertised as production-ready.
+
+### New scoped developer functions
+
+`ai_brain/developer_tools.py` implements typed `git_status`, `git_commit`, and `git_push` without shell interpolation. Workspaces are verified against configured roots; commit and publish are native-approval gated. Arbitrary code execution, package installation, and IDE-agent injection still need safe implementation and validation.

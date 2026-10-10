@@ -21,6 +21,7 @@ ALLOWED_TOOLS = {
     "youtube", "send_email", "send_whatsapp_message", "make_whatsapp_call",
     "list_directory", "read_file", "write_file", "create_folder",
     "delete_item", "copy_item", "move_item", "rename_item",
+    "git_status", "git_commit", "git_push",
     # "shell_exec" intentionally omitted until real OS sandboxing.
 }
 

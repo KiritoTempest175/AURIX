@@ -14,6 +14,7 @@ _NETWORK_TOOLS = frozenset({
     "web_search", "youtube", "send_email",
     "send_whatsapp_message", "make_whatsapp_call",
     "play_media",
+    "git_push",
 })
 
 
