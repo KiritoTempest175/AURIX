@@ -41,29 +41,40 @@ def _local_path(raw: object) -> Optional[Path]:
     return p if p.is_file() and p.suffix.lower() == ".gguf" else None
 
 
-def choose_gpu_layers(requested_layers: int, max_vram_gb: float = 6.0) -> int:
-    """Conservative NVML preflight; not a hard per-process VRAM limit."""
-    if requested_layers <= 0:
+def choose_gpu_layers(requested_layers: int) -> int:
+    """Optional GPU contention check; no card, vendor, or capacity requirement.
+
+    NVML is NVIDIA-only telemetry. Without it, let llama.cpp select the
+    installed GPU/CPU backend rather than wrongly forcing CPU execution.
+    """
+    if requested_layers == 0:
         return 0
     try:
         from pynvml import (
-            nvmlInit, nvmlDeviceGetHandleByIndex,
-            nvmlDeviceGetMemoryInfo, nvmlDeviceGetUtilizationRates
+            nvmlInit, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex,
+            nvmlDeviceGetMemoryInfo, nvmlDeviceGetUtilizationRates,
         )
         nvmlInit()
-        device = nvmlDeviceGetHandleByIndex(0)
-        mem = nvmlDeviceGetMemoryInfo(device)
-        busy = nvmlDeviceGetUtilizationRates(device).gpu
-        # Model weights are not total allocation; allow extra KV/scratch headroom.
-        ceiling = min(6.0, max_vram_gb) * (1024 ** 3)
-        if mem.free < ceiling or busy >= 70:
-            LOG.warning("GPU occupied or free VRAM below configured reserve; using CPU")
+        count = nvmlDeviceGetCount()
+        observed = 0
+        busy = 0
+        for index in range(count):
+            try:
+                device = nvmlDeviceGetHandleByIndex(index)
+                mem = nvmlDeviceGetMemoryInfo(device)
+                usage = nvmlDeviceGetUtilizationRates(device)
+                observed += 1
+                if (mem.total and mem.free / mem.total < 0.05) or usage.gpu >= 90:
+                    busy += 1
+            except Exception:
+                continue
+        if observed and busy == observed:
+            LOG.info("GPU is heavily occupied; favoring CPU for this model session")
             return 0
-        return requested_layers
-    except Exception as exc:
-        LOG.info("Cannot validate available VRAM (%s); using CPU", type(exc).__name__)
-        return 0
-
+    except Exception:
+        # AMD/Intel/non-NVML GPUs are allowed; backends choose at load time.
+        pass
+    return requested_layers
 
 class LocalGGUFRunner:
     """Lazy, synchronized GGUF inference with bounded conversation history."""
@@ -73,7 +84,7 @@ class LocalGGUFRunner:
         self.model_path = _local_path(cfg.get("model_path"))
         self.fallback_model_path = _local_path(cfg.get("fallback_model_path"))
         self.n_ctx = min(8192, max(512, int(cfg.get("n_ctx", 2048))))
-        self.n_gpu_layers = int(cfg.get("n_gpu_layers", 0))
+        self.n_gpu_layers = int(cfg.get("n_gpu_layers", -1))
         self.unload_after = max(30, int(cfg.get("model_unload_after_seconds", 120)))
         self._lock = threading.RLock()
         self._model: Any = None
@@ -102,14 +113,26 @@ class LocalGGUFRunner:
             raise RuntimeError(
                 "Local GGUF inference requires llama-cpp-python to be installed."
             ) from exc
-        # CPU first. Users may choose GPU layers once resource measurement
-        # proves their particular model and context fit the 6GB budget.
-        self._model = Llama(
-            model_path=str(model_path),
-            n_ctx=self.n_ctx,
-            n_gpu_layers=choose_gpu_layers(self.n_gpu_layers),
-            verbose=False,
-        )
+        # Try GPU offload according to the installed llama.cpp backend, with
+        # no absolute memory quotas or specific GPU model requirements.
+        layers = choose_gpu_layers(self.n_gpu_layers)
+        try:
+            self._model = Llama(
+                model_path=str(model_path),
+                n_ctx=self.n_ctx,
+                n_gpu_layers=layers,
+                verbose=False,
+            )
+        except (RuntimeError, MemoryError, OSError) as exc:
+            if layers == 0:
+                raise
+            LOG.warning("GPU load failed (%s); retrying on CPU", type(exc).__name__)
+            self._model = Llama(
+                model_path=str(model_path),
+                n_ctx=self.n_ctx,
+                n_gpu_layers=0,
+                verbose=False,
+            )
         self._last_used = time.monotonic()
         return self._model
 

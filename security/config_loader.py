@@ -60,10 +60,21 @@ def load_config() -> dict:
     if not isinstance(data, dict):
         raise ValueError("Invalid AURIX config")
     resources = data.get("resources", {})
-    for key, upper in (("max_ram_gb", 12.0), ("max_vram_gb", 6.0)):
-        value = resources.get(key, upper)
-        if not isinstance(value, (int, float)) or not (0 < value <= upper):
-            raise ValueError(f"resources.{key} must be in (0,{upper}]")
+    if not isinstance(resources, dict):
+        raise ValueError("resources must be a TOML section")
+    for key, default in (
+        ("min_free_ram_percent", 5.0),
+        ("min_free_vram_percent", 5.0),
+        ("gpu_busy_percent", 85.0),
+        ("cpu_throttle_percent", 85.0),
+    ):
+        value = resources.get(key, default)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not (0 <= value <= 100):
+            raise ValueError(f"resources.{key} must be between 0 and 100 percent")
+    interval = resources.get("poll_interval_ms", 2500)
+    if isinstance(interval, bool) or not isinstance(interval, int) or interval < 500:
+        raise ValueError("resources.poll_interval_ms must be >= 500")
+    # Legacy max_ram_gb and max_vram_gb keys are ignored: no fixed quotas.
     security = data.get("security", {})
     if not isinstance(security.get("allowed_project_paths", []), list):
         raise ValueError("security.allowed_project_paths must be a list")

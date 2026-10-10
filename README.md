@@ -22,7 +22,7 @@ AURIX is an **experimental Windows desktop AI assistant**. The application UI is
 - Always-on wake-word detection and interruptible voice playback. Push-to-talk now uses an optional local Whisper model when installed, otherwise reports unavailability.
 - A Windows restricted-token/Job-Object command sandbox; model-generated `shell_exec` is **disabled** until this exists.
 - The active agent router uses lazy, local GGUF inference through optional `llama-cpp-python`. Model weights and the native library are not bundled. Legacy Transformers/Ollama code remains in the repository but is not used by the default router.
-- A verified 6 GB **per-application** VRAM / 12 GB RAM hard cap, idle <150 MB resource guarantee, and complete evaluated training.
+- The system no longer imposes fixed RAM/VRAM allocation ceilings or GPU-model requirements. The governor reacts to low free-memory percentages and thermal warnings; GGUF uses available acceleration with a CPU fallback. Real-world idle, training and performance benchmarks remain unverified.
 - Complete role-based tool SDK, rollback/undo, persistent native approval audit, memory explorer, signed installer, and independent security assessment.
 - Online communications and software-installation workflows require explicit review; no guarantee is made that every action is fully offline.
 
@@ -76,7 +76,7 @@ pip install psutil
 python scripts/resource_proof.py --pid <AURIX_PROCESS_PID> --seconds 60 --csv resource-proof.csv
 ```
 
-The report measures the chosen process tree's RSS and CPU, plus system-wide GPU usage/VRAM when NVML is available. It does not claim per-process VRAM ownership or enforce limits.
+The report measures the chosen process tree's RSS and CPU, plus system-wide GPU usage/VRAM when NVML is available. It does not claim per-process VRAM ownership. There are no fixed RAM or VRAM usage quotas.
 
 ## Testing and CI
 

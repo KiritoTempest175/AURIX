@@ -1,22 +1,8 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# ai_engine/training/memory_manager.py
-# ─────────────────────────────────────────────────────────────────────────────
-# Graceful VRAM eviction manager — bridges the PyTorch training loop with
-# the Rust hardware governor via the PyO3 `aurix_core.SystemState()` class.
-#
-# When the Rust governor detects RAM > 12 GB or VRAM > 6 GB, it sets the
-# atomic suspend flag. This class polls that flag at the end of every
-# training step, and if set:
-#   1. Saves the LoRA adapter weights + tokenizer to disk
-#   2. Flushes the Python garbage collector
-#   3. Releases all cached CUDA VRAM back to the OS
-#   4. Blocks in a sleep loop until resources stabilise
-#
-# Hardware context:
-#   GPU:  NVIDIA RTX 4060 — 8 GB total VRAM, 6 GB ceiling
-#   RAM:  16 GB total, 12 GB ceiling
-#   Disk: Mechanical HDD — checkpoint saves take 3–8 seconds
-# ─────────────────────────────────────────────────────────────────────────────
+"""Train with adaptive governor yielding, checkpointing and cache cleanup.
+
+Hardware-neutral resource pressure replaces fixed RAM and VRAM ceilings.
+CUDA is optional for telemetry; this manager does not pin specific GPU models.
+"""
 
 import gc
 import os
@@ -54,16 +40,10 @@ class GracefulMemoryManager:
     every 1000ms. This class reads the resulting atomic boolean flag via
     the PyO3 `SystemState` class — zero network sockets, zero IPC overhead.
 
-    Attributes:
-        VRAM_LIMIT:  Soft VRAM budget in bytes (5 GB). The Rust governor
-                     enforces a hard 6 GB ceiling; we target 5 GB to leave
-                     headroom for CUDA context and driver allocations.
-        RAM_LIMIT:   Hard RAM ceiling in bytes (12 GB).
-        SAVE_PATH:   Default disk path for emergency checkpoint saves.
+    The governor controls suspension when the system is under memory or
+    thermal pressure, regardless of installed RAM or GPU capacity.
     """
 
-    VRAM_LIMIT = 5 * 1024**3          # 5 GB in bytes
-    RAM_LIMIT = 12 * 1024**3          # 12 GB in bytes
     STEPS_BETWEEN_SAVES = 5           # Periodic checkpoint frequency (every N steps)
     SAVE_INTERVAL = 60                # Minimum seconds between periodic saves
     POLL_SLEEP_INTERVAL = 1.0         # Sleep duration (seconds) while waiting for recovery
@@ -101,13 +81,13 @@ class GracefulMemoryManager:
     def check_and_evict(self) -> bool:
         """Polls the Rust governor.
 
-        If a system spike is active (RAM > 12GB or VRAM > 6GB), saves the model
-        checkpoint to disk, flushes CUDA VRAM, and sleeps until resources stabilize.
+        Under system resource pressure, saves an adapter checkpoint,
+        releases cached CUDA allocations when present, and resumes on recovery.
 
         Returns:
             bool: True if an eviction occurred, False otherwise.
         """
-        # 1. Call self.system_state.check_suspended() to check if RAM > 12GB or VRAM > 6GB.
+        # Yield only when the adaptive governor indicates resource pressure.
         if not self.system_state.check_suspended():
             self.steps_since_last_save += 1
             self._maybe_periodic_save()
@@ -116,7 +96,7 @@ class GracefulMemoryManager:
         # 2. If suspended:
         self.total_evictions += 1
         print(
-            f"\n⚠️  [AURIX Governor] RESOURCE SPIKE DETECTED (RAM > 12GB or VRAM > 6GB) — "
+            f"\n⚠️  [AURIX Governor] SYSTEM RESOURCE PRESSURE DETECTED — "
             f"eviction #{self.total_evictions}"
         )
 

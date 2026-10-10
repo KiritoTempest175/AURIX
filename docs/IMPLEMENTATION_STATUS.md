@@ -13,7 +13,7 @@ Updated: 2026-10-10. Status is based on code changes, not an executed Windows pe
 | H-05 | Partial | Native startup prefers a packaged worker and an unsigned Windows sidecar/Tauri workflow exists; clean-VM installation remains unverified |
 | H-06 | Mitigated | `frontend/src-tauri/tauri.conf.json`: references only committed icon.ico; produce full image asset set later |
 | H-07 | Partially mitigated | `ai_engine/training/student_qlora_loop.py` now launches a real gated QLoRA subprocess and reports exit status; model evaluation and metrics remain unverified |
-| H-08 | Partially fixed | `core_engine/src/governor/monitor.rs` corrects resource constants; `ai_engine/inference/local_gguf.py` uses an NVML occupancy/headroom preflight and CPU fallback. Hard 6 GiB VRAM/process enforcement and 12 GiB process-RAM enforcement remain unverified |
+| H-08 | Adapted to new requirement | Removed absolute RAM/VRAM ceilings from Rust and Python. The governor now yields background work on relative low-memory/thermal signals, and GGUF permits any supported GPU backend with CPU fallback. Native hardware benchmarks remain pending. |
 | H-09 | Partially fixed | Native confirmation and 600-char complete outbound message preview; persistent audit, large scrollable previews and expiry display remain |
 | H-10 | Fixed in source | Tauri CSP enabled in `frontend/src-tauri/tauri.conf.json`; review final policies with packaged app |
 | M-01 | Partially fixed | Thread/request bounds in bridge; inference still serialized and can block queued requests |
@@ -38,7 +38,7 @@ Updated: 2026-10-10. Status is based on code changes, not an executed Windows pe
 
 - A bundled, validated GGUF/llama.cpp runtime; optional local-only `ai_engine/inference/local_gguf.py` now runs the default model path without cloud/Ollama.
 - Lazy wake-word/STT/TTS pipeline and interruptible speech.
-- Measured near-zero idle resources and hard per-process VRAM limits.
+- Measured low idle resource use and adaptive optimization on varied hardware; fixed RAM/VRAM caps were intentionally removed.
 - Rust telemetry history and CSV exports.
 - Full git/software installation/IDE/email/WhatsApp action set with risk tiers.
 - Complete second brain: opt-in encrypted SQLite memory and an initial Memory Explorer are available; vector retrieval, conflict resolution, durable backups and tested key rotation remain outstanding.

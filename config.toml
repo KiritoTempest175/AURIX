@@ -50,10 +50,12 @@ max_history_scan = 300
 
 [resources]
 
-max_ram_gb = 12.0
-max_vram_gb = 6.0
+# Adaptive pressure signals, not GPU/RAM allocation quotas.
+min_free_ram_percent = 5.0
+min_free_vram_percent = 5.0
+gpu_busy_percent = 85.0
 cpu_throttle_percent = 85.0
-poll_interval_ms = 1000
+poll_interval_ms = 2500
 suspend_on_overload = true
 
 
@@ -73,7 +75,7 @@ backend = "llama_cpp"
 model_path = "models/gemma-3n-E4B-it-Q4_K_M.gguf"
 fallback_model_path = ""
 n_ctx = 2048
-n_gpu_layers = 0 # CPU-safe default; opt in to GPU only after measuring VRAM.
+n_gpu_layers = -1 # Auto offload when supported by llama.cpp; retry on CPU otherwise.
 model_unload_after_seconds = 120
 
 model_name = "google/gemma-4-E4B-it" # legacy Transformers path; GGUF runtime pending

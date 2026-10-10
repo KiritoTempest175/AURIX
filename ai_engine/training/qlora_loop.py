@@ -1,28 +1,9 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# ai_engine/training/qlora_loop.py
-# ─────────────────────────────────────────────────────────────────────────────
-# Unsloth 4-bit QLoRA fine-tuning loop for the AURIX 5B student model.
-#
-# This script is the main entry point for continuous background training.
-# It loads a 5B parameter model in 4-bit quantisation via Unsloth, applies
-# LoRA adapters, and trains with an SFTTrainer that respects the hardware
-# constraints of the target machine:
-#
-#   GPU:  NVIDIA RTX 4060 — 8 GB total VRAM, 6 GB ceiling
-#   RAM:  16 GB total, 12 GB ceiling
-#   Disk: Mechanical HDD — checkpoint saves are slow
-#
-# Key optimisations:
-#   - 4-bit NF4 quantisation via Unsloth (halves VRAM vs. FP16)
-#   - Micro-batch size 1 with gradient accumulation steps 8
-#     (effective batch size = 8 without 8× the VRAM)
-#   - Unsloth gradient checkpointing (trades ~15% speed for ~40% VRAM)
-#   - 8-bit AdamW optimiser (halves optimiser state memory)
-#   - GovernorCallback evicts VRAM on hardware spikes via Rust FFI
-#
-# Blueprint invariant: Zero network sockets.  All data is streamed from
-# local JSONL / SQLite via DynamicTelemetryDataset.
-# ─────────────────────────────────────────────────────────────────────────────
+"""Offline 4-bit QLoRA fine-tuning with adaptive power-state yielding.
+
+Optimizations include quantized weights, gradient checkpointing and small
+micro-batches. Hardware model and available RAM/VRAM are not hard-coded.
+The active training backend still requires supported CUDA/Unsloth libraries.
+"""
 
 import os
 import torch
@@ -111,7 +92,7 @@ class GovernorCallback(TrainerCallback):
     every training step.  It delegates to `GracefulMemoryManager.check_and_evict()`
     which polls the Rust governor's atomic suspend flag.
 
-    If the governor has flagged a resource spike (RAM > 12GB or VRAM > 6GB),
+    If the governor has flagged a resource spike (system memory or thermal pressure),
     the memory manager will:
       1. Save the current LoRA weights to disk
       2. Flush gc + CUDA cache
@@ -220,7 +201,7 @@ def run_training():
     print("   ✓ Dataset stream ready")
 
     # ── Step 5: Configure training arguments ──────────────────────────────
-    # Every parameter here is tuned for the RTX 4060 / 8GB VRAM constraint.
+    # Every parameter here is tuned for the available system resources.
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     training_args = TrainingArguments(

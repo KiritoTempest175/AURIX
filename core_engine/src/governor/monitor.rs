@@ -17,19 +17,46 @@ use nvml_wrapper::Nvml;
 use crate::governor::atomic_state::{set_power_state, set_suspend_flag, PowerState};
 use crate::governor::idle_monitor::create_idle_monitor;
 
-// ─── Hardware Ceilings (Configurable defaults) ──────────────────────────────
-const ACTIVE_MAX_RAM_BYTES: u64 = 12 * 1024 * 1024 * 1024; // 12 GiB host memory limit
-const IDLE_MAX_RAM_BYTES: u64 = 12 * 1024 * 1024 * 1024;   // 12 GiB (fixed 102 typo)
-const ABSOLUTE_MAX_RAM_BYTES: u64 = 12 * 1024 * 1024 * 1024; // System-wide threshold; not per-process reservation
+// Adaptive memory pressure, relative to actual installed hardware.
+// No absolute memory quotas or mandatory GPU model.
+const MIN_FREE_PERCENT: u64 = 5;
+const GPU_THERMAL_WARNING_CELSIUS: u32 = 85;
+const IDLE_THRESHOLD_SECONDS: u64 = 300;
+const ACTIVE_POLL_INTERVAL_MS: u64 = 2500;
+const IDLE_POLL_INTERVAL_MS: u64 = 5000;
 
-const ACTIVE_MAX_VRAM_BYTES: u64 = 6 * 1024 * 1024 * 1024;  // 6.0 GiB Active
-const IDLE_MAX_VRAM_BYTES: u64 = 6 * 1024 * 1024 * 1024;    // 6.0 GiB Idle
-const ABSOLUTE_MAX_VRAM_BYTES: u64 = 6 * 1024 * 1024 * 1024; // 6.0 GiB Absolute
+/// Low free-memory indicator for background-work yielding, not an allocation cap.
+pub fn memory_pressure(free_bytes: u64, total_bytes: u64) -> bool {
+    total_bytes > 0 && (free_bytes as u128) * 100 < (total_bytes as u128) * MIN_FREE_PERCENT as u128
+}
 
-const GPU_THERMAL_LIMIT_CELSIUS: u32 = 82;                  // GPU core temp ceiling
-const IDLE_THRESHOLD_SECONDS: u64 = 300;                    // 5 minutes
-const POLL_INTERVAL_MS: u64 = 1000;                         // 1000ms cadence
-const GPU_DEVICE_INDEX: u32 = 0;
+/// NVML is optional: inspect all NVIDIA devices, never enforce index zero.
+/// Non-NVIDIA/CPU-only systems continue with system RAM metrics.
+fn gpu_snapshot(nvml: &Nvml) -> (Option<u64>, Option<u64>, Option<u32>) {
+    let mut sample: Option<(u64, u64, Option<u32>)> = None;
+    if let Ok(count) = nvml.device_count() {
+        for index in 0..count {
+            if let Ok(device) = nvml.device_by_index(index) {
+                if let Ok(mem) = device.memory_info() {
+                    let temp = device.temperature(
+                        nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu
+                    ).ok();
+                    let more_pressured = sample.map_or(true, |(used, total, _)| {
+                        total == 0 || (mem.used as u128) * (total as u128)
+                            > (used as u128) * (mem.total as u128)
+                    });
+                    if more_pressured {
+                        sample = Some((mem.used, mem.total, temp));
+                    }
+                }
+            }
+        }
+    }
+    match sample {
+        Some((used, total, temp)) => (Some(used), Some(total), temp),
+        None => (None, None, None),
+    }
+}
 
 /// Snapshot of system hardware state.
 #[derive(Debug, Clone, Copy)]
@@ -75,51 +102,24 @@ pub fn start_hardware_monitor() {
 
             set_power_state(current_power_state);
 
-            // 2. Select dynamic RAM / VRAM thresholds based on current power state
-            let (max_ram, max_vram) = match current_power_state {
-                PowerState::Active => (ACTIVE_MAX_RAM_BYTES, ACTIVE_MAX_VRAM_BYTES),
-                PowerState::Idle | PowerState::Locked => (IDLE_MAX_RAM_BYTES, IDLE_MAX_VRAM_BYTES),
-                PowerState::Suspending => (0, 0),
-            };
+            // Relative pressure yields background work only when the host
+            // genuinely runs low on memory. There is no fixed GiB ceiling.
+            let mut should_suspend = memory_pressure(
+                sys.available_memory(), sys.total_memory()
+            );
 
-            let mut should_suspend = false;
-
-            // 3. RAM Limit Verification
-            if used_ram >= max_ram || used_ram >= ABSOLUTE_MAX_RAM_BYTES {
-                eprintln!(
-                    "[LUNA Governor] RAM CEILING BREACH ({:?}): {:.2} GB / {:.2} GB limit",
-                    current_power_state,
-                    used_ram as f64 / (1024.0 * 1024.0 * 1024.0),
-                    max_ram as f64 / (1024.0 * 1024.0 * 1024.0),
-                );
-                should_suspend = true;
-            }
-
-            // 4. VRAM & Thermal Verification
+            // GPU telemetry is optional. Unknown/non-NVIDIA hardware must
+            // never be rejected simply because NVML is unavailable.
             if let Some(ref nvml) = nvml_opt {
-                if let Ok(device) = nvml.device_by_index(GPU_DEVICE_INDEX) {
-                    // Check VRAM
-                    if let Ok(mem_info) = device.memory_info() {
-                        if mem_info.used >= max_vram || mem_info.used >= ABSOLUTE_MAX_VRAM_BYTES {
-                            eprintln!(
-                                "[LUNA Governor] VRAM CEILING BREACH ({:?}): {:.2} GB / {:.2} GB limit",
-                                current_power_state,
-                                mem_info.used as f64 / (1024.0 * 1024.0 * 1024.0),
-                                max_vram as f64 / (1024.0 * 1024.0 * 1024.0),
-                            );
-                            should_suspend = true;
-                        }
+                let (used, total, temp) = gpu_snapshot(nvml);
+                if let (Some(used), Some(total)) = (used, total) {
+                    if memory_pressure(total.saturating_sub(used), total) {
+                        should_suspend = true;
                     }
-
-                    // Check Thermal Throttle
-                    if let Ok(temp) = device.temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu) {
-                        if temp >= GPU_THERMAL_LIMIT_CELSIUS {
-                            eprintln!(
-                                "[LUNA Governor] GPU THERMAL THROTTLE TRIGGERED: {} C >= {} C ceiling",
-                                temp, GPU_THERMAL_LIMIT_CELSIUS
-                            );
-                            should_suspend = true;
-                        }
+                }
+                if let Some(temp) = temp {
+                    if temp >= GPU_THERMAL_WARNING_CELSIUS {
+                        should_suspend = true;
                     }
                 }
             }
@@ -127,7 +127,13 @@ pub fn start_hardware_monitor() {
             // 5. Update global atomic suspend flag
             set_suspend_flag(should_suspend);
 
-            thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
+            thread::sleep(Duration::from_millis(
+                if current_power_state == PowerState::Active {
+                    ACTIVE_POLL_INTERVAL_MS
+                } else {
+                    IDLE_POLL_INTERVAL_MS
+                }
+            ));
         }
     });
 }
@@ -143,18 +149,9 @@ pub fn snapshot_resources() -> ResourceSnapshot {
     let idle_sec = idle_monitor.get_idle_seconds();
     let screen_locked = idle_monitor.is_screen_locked();
 
-    let (used_vram, total_vram, gpu_temp) = match Nvml::init() {
-        Ok(nvml) => {
-            if let Ok(device) = nvml.device_by_index(GPU_DEVICE_INDEX) {
-                let mem = device.memory_info().ok();
-                let temp = device.temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu).ok();
-                (mem.as_ref().map(|m| m.used), mem.as_ref().map(|m| m.total), temp)
-            } else {
-                (None, None, None)
-            }
-        }
-        Err(_) => (None, None, None),
-    };
+    let (used_vram, total_vram, gpu_temp) = Nvml::init()
+        .map(|nvml| gpu_snapshot(&nvml))
+        .unwrap_or((None, None, None));
 
     let power_state = if screen_locked {
         PowerState::Locked
@@ -164,18 +161,12 @@ pub fn snapshot_resources() -> ResourceSnapshot {
         PowerState::Active
     };
 
-    let max_ram = match power_state {
-        PowerState::Active => ACTIVE_MAX_RAM_BYTES,
-        _ => IDLE_MAX_RAM_BYTES,
-    };
-    let max_vram = match power_state {
-        PowerState::Active => ACTIVE_MAX_VRAM_BYTES,
-        _ => IDLE_MAX_VRAM_BYTES,
-    };
-
-    let suspend_triggered = used_ram >= max_ram
-        || used_vram.map_or(false, |v| v >= max_vram)
-        || gpu_temp.map_or(false, |t| t >= GPU_THERMAL_LIMIT_CELSIUS);
+    let suspend_triggered = memory_pressure(sys.available_memory(), total_ram)
+        || match (used_vram, total_vram) {
+            (Some(used), Some(total)) => memory_pressure(total.saturating_sub(used), total),
+            _ => false,
+        }
+        || gpu_temp.map_or(false, |temp| temp >= GPU_THERMAL_WARNING_CELSIUS);
 
     ResourceSnapshot {
         used_ram_bytes: used_ram,
@@ -187,5 +178,22 @@ pub fn snapshot_resources() -> ResourceSnapshot {
         is_screen_locked: screen_locked,
         power_state,
         suspend_triggered,
+    }
+}
+
+#[cfg(test)]
+mod pressure_tests {
+    use super::memory_pressure;
+    #[test]
+    fn adapts_to_different_memory_sizes() {
+        let gib = 1024_u64 * 1024 * 1024;
+        assert!(!memory_pressure(2 * gib, 8 * gib));
+        assert!(!memory_pressure(30 * gib, 128 * gib));
+        assert!(memory_pressure(100 * 1024 * 1024, 8 * gib));
+        assert!(memory_pressure(2 * gib, 128 * gib));
+    }
+    #[test]
+    fn missing_memory_metrics_do_not_trigger() {
+        assert!(!memory_pressure(0, 0));
     }
 }
