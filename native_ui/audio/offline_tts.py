@@ -126,6 +126,11 @@ def _speak_worker(executable: str, model: Path, text: str) -> None:
             _ACTIVE = False
 
 
+def is_active() -> bool:
+    with _LOCK:
+        return bool(_ACTIVE)
+
+
 def _speak_windows_voice(text: str) -> None:
     """Speak using Windows-installed local voices; no network or shell input."""
     global _ACTIVE, _NATIVE_PROC
@@ -134,7 +139,16 @@ def _speak_windows_voice(text: str) -> None:
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Speech
 $voice = [System.Speech.Synthesis.SpeechSynthesizer]::new()
-try { $voice.Speak([Console]::In.ReadToEnd()) }
+try {
+    try {
+        $voice.SelectVoiceByHints(
+            [System.Speech.Synthesis.VoiceGender]::Female,
+            [System.Speech.Synthesis.VoiceAge]::Adult
+        )
+    } catch { }
+    $voice.Rate = 1
+    $voice.Speak([Console]::In.ReadToEnd())
+}
 finally { $voice.Dispose() }
 """
     encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")

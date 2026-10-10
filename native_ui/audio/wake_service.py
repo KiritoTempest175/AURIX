@@ -69,6 +69,12 @@ def _listen() -> None:
             heard = transcribe_microphone()
             if _STOP.is_set():
                 break
+            try:
+                from native_ui.audio.offline_tts import is_active
+                if is_active():
+                    continue
+            except ImportError:
+                pass
             match = _WAKE.search(heard)
             if match:
                 command = heard[match.end():].strip(" ,.!?")[:500]

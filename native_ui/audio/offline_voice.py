@@ -54,7 +54,9 @@ try {
     $engine.LoadGrammar($grammar)
     $engine.SetInputToDefaultAudioDevice()
     $result = $engine.Recognize([TimeSpan]::FromSeconds(8))
-    if ($null -ne $result) { [Console]::Out.Write($result.Text) }
+    if ($null -ne $result -and $result.Confidence -ge 0.76) {
+        [Console]::Out.Write($result.Text)
+    }
 } catch {
     exit 2
 } finally {
@@ -121,6 +123,11 @@ def transcribe_microphone() -> str:
         sd.wait()
         signal = np.asarray(frames, dtype=np.float32).reshape(-1)
         segments, _ = model.transcribe(signal, beam_size=3, vad_filter=True)
-        return " ".join(segment.text.strip() for segment in segments).strip()[:12000]
+        accepted = [
+            segment.text.strip() for segment in segments
+            if float(getattr(segment, "no_speech_prob", 0)) < 0.45
+            and float(getattr(segment, "avg_logprob", 0)) > -0.65
+        ]
+        return " ".join(accepted).strip()[:12000]
     finally:
         _VOICE_LOCK.release()

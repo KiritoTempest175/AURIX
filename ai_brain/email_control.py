@@ -27,6 +27,7 @@ import sys
 import urllib.parse
 
 from dataclasses import dataclass
+import re
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Optional, Protocol
@@ -126,8 +127,28 @@ _BODY_GENERATION_INSTRUCTION = (
     "Do not repeat the subject line. "
     "Do not include placeholder brackets such as [Your Name]. "
     "Do not include meta-commentary. "
-    "Match the tone to what the subject implies."
+    "Match the tone to what the subject implies. For a proposal, "
+    "be specific about the intended collaboration without inventing "
+    "budgets, project goals, deadlines, sender names, or commitments. "
+    "Never output fill-in fields; request missing essentials instead."
 )
+
+
+# An AI-generated template is not a finished email. Never send blanks.
+_DRAFT_TEMPLATE = re.compile(
+    r"\[[^\]\n]{2,100}\]|\{\{[^}]{2,100}\}\}|"
+    r"^\s*(?:project name|project timeline|project budget|project goals)\s*:\s*$",
+    re.I | re.M,
+)
+
+
+def draft_is_complete(body: str) -> bool:
+    if not isinstance(body, str) or not body.strip():
+        return False
+    if _DRAFT_TEMPLATE.search(body):
+        return False
+    lowered = body.casefold()
+    return "insert project" not in lowered and "[your name]" not in lowered
 
 
 # ================================================================
@@ -232,11 +253,8 @@ class EmailController:
             body or ""
         ).strip()
 
-        if not body:
-
-            raise EmailGenerationError(
-                "AI generated an empty email body."
-            )
+        if not draft_is_complete(body):
+            raise EmailGenerationError("Email draft contains unfinished placeholders.")
 
         logger.info(
             "Generated email draft for subject '%s' "
@@ -615,11 +633,11 @@ class EmailController:
             body or ""
         ).strip()
 
-        if not body:
-
+        if not draft_is_complete(body):
             return (
-                "Email not sent: "
-                "message body is empty."
+                "Email NOT sent: the draft contains incomplete template fields. "
+                "Please provide project details or ask LUNA to create a complete "
+                "introductory proposal for approval."
             )
 
         # --------------------------------------------------------
