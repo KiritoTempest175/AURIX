@@ -147,6 +147,8 @@ export default function App() {
   const [historyMetric, setHistoryMetric] = useState("cpu");
   const [telemetryHistory, setTelemetryHistory] = useState([]);
   const [exportedPath, setExportedPath] = useState("");
+  const [auditEvents, setAuditEvents] = useState([]);
+  const [auditVerified, setAuditVerified] = useState(null);
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -201,6 +203,14 @@ export default function App() {
       setExportedPath(path);
     } catch (error) { setExportedPath(String(error)); }
   };
+
+  useEffect(() => {
+    if (activeView !== "Activity" || !isTauri() || !workerOnline) return;
+    invoke("list_activity").then((data) => {
+      setAuditEvents(data.events ?? []);
+      setAuditVerified(data.enabled ? data.verified : null);
+    }).catch(() => { setAuditVerified(false); });
+  }, [activeView, workerOnline]);
 
   useEffect(() => {
     if (!workerOnline || !isTauri()) return;
@@ -259,7 +269,12 @@ export default function App() {
     if (!currentApproval || approving) return;
     setApproval(null);
     if (!accept) {
-      setMessages((items) => [...items, { from: "aurix", text: "Action rejected." }]);
+      try {
+        await invoke("reject_trust", { payload: { request: currentApproval.id } });
+        setMessages((items) => [...items, { from: "aurix", text: "Action rejected." }]);
+      } catch (error) {
+        setMessages((items) => [...items, { from: "aurix", text: `Rejection error: ${String(error)}` }]);
+      }
       return;
     }
     setApproving(true);
@@ -520,8 +535,19 @@ export default function App() {
             )}
             {activeView === "Activity" && (
               <>
-                <h2>Session activity</h2>
-                <p>Current conversation only; a persistent audited action timeline is still under development.</p>
+                <h2>Activity and authorization log</h2>
+                <p>Event ledger stores tool names and fingerprints without user content. Verify status: {
+                  auditVerified === null ? "Unavailable" : auditVerified ? "Valid HMAC chain" : "Verification failed"
+                }</p>
+                <div className="memory-list">
+                  {auditEvents.map((event) => (
+                    <article className="memory-item" key={event.seq}>
+                      <span>#{event.seq} · {new Date(event.timestamp * 1000).toLocaleString()}</span>
+                      <p>{event.tool} — {event.stage}</p>
+                    </article>
+                  ))}
+                </div>
+                <h3>Current session conversation</h3>
                 <div className="memory-list">
                   {messages.map((m, i) => <article className="memory-item" key={i}>
                     <strong>{m.from === "user" ? "User" : "LUNA"}</strong><p>{m.text}</p>

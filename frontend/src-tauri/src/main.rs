@@ -206,7 +206,10 @@ async fn execute_trust(payload: TrustRequest, state: State<'_, BridgeState>) -> 
     let description = preview.description.ok_or("Missing action description")?;
     let authorized = tokio::task::spawn_blocking(move || native_approve(&description))
         .await.map_err(|_| "Approval dialog failed".to_string())?;
-    if !authorized { return Ok(TrustResponse { result: "Action rejected by user.".into() }); }
+    if !authorized {
+        let _ = local_post(&state, "/reject_trust", serde_json::json!({"request": request})).await;
+        return Ok(TrustResponse { result: "Action rejected by user.".into() });
+    }
     let result = state.client.post(format!("{BRIDGE_URL}/execute_trust"))
         .bearer_auth(&state.token).json(&serde_json::json!({"request":request}))
         .send().await.map_err(|_| "Local AI worker unavailable".to_string())?;
@@ -274,6 +277,16 @@ async fn listen_voice(state: State<'_, BridgeState>) -> Result<serde_json::Value
 }
 
 #[tauri::command]
+async fn list_activity(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    local_get(&state, "/audit").await
+}
+
+#[tauri::command]
+async fn reject_trust(payload: TrustRequest, state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    local_post(&state, "/reject_trust", serde_json::json!({"request": payload.request})).await
+}
+
+#[tauri::command]
 async fn kill_actions(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
     local_post(&state, "/kill", serde_json::json!({})).await
 }
@@ -320,7 +333,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_telemetry, get_bridge_telemetry, get_bridge_health, send_message, execute_trust,
             get_ui_settings, set_offline_mode, list_memories, add_memory, delete_memory,
-            listen_voice, kill_actions, resume_actions,
+            listen_voice, kill_actions, resume_actions, list_activity, reject_trust,
             get_telemetry_history, export_telemetry_csv
         ])
         .run(tauri::generate_context!())

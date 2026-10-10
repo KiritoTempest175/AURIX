@@ -145,6 +145,18 @@ class BridgeHandler(BaseHTTPRequestHandler):
             from ai_brain.secure_memory import memory_enabled
             return self._json({"offline": offline_mode(), "stopped": action_is_stopped(),
                                "memory_enabled": memory_enabled()})
+        if self.path == "/audit":
+            from security.action_audit import default_audit
+            try:
+                ledger = default_audit()
+                return self._json({
+                    "enabled": ledger is not None,
+                    "verified": ledger.verify() if ledger else False,
+                    "events": ledger.recent(100) if ledger else [],
+                })
+            except Exception:
+                LOG.exception("Audit read failed")
+                return self._json({"error": "AUDIT_UNAVAILABLE"}, 503)
         if self.path == "/memory":
             from ai_brain.secure_memory import memory_enabled, get_memory_store
             if not memory_enabled():
@@ -213,7 +225,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             except Exception:
                 LOG.exception("Local STT failed")
                 return self._json({"error": "VOICE_UNAVAILABLE"}, 503)
-        if self.path not in ("/dispatch", "/trust_preview", "/execute_trust"):
+        if self.path not in ("/dispatch", "/trust_preview", "/execute_trust", "/reject_trust"):
             return self._json({"error": "NOT_FOUND"}, 404)
 
         with _execute_lock:
@@ -230,6 +242,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
                     return self._json({"error": "INVALID_REQUEST"}, 400)
                 if self.path == "/trust_preview":
                     return self._json(brain.executor.preview_pending(request))
+                if self.path == "/reject_trust":
+                    return self._json({"rejected": brain.executor.reject_pending(request)})
                 # The Rust Tauri command must first show the native OS dialog.
                 return self._json({"result": brain.execute_trust_token(request)})
             except Exception:

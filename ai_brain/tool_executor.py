@@ -124,6 +124,27 @@ class ToolExecutor:
             Dict[str, Any],
         ] = {}
 
+    def _audit_event(self, tool_name: str, fingerprint: str, stage: str) -> bool:
+        """Persist privacy-preserving activity data. On Windows, fail closed."""
+        try:
+            from security.action_audit import default_audit
+            ledger = default_audit()
+            if ledger is not None:
+                ledger.append(tool_name, stage, fingerprint)
+            return True
+        except Exception:
+            logger.exception("Security audit database unavailable")
+            return False
+
+    def reject_pending(self, request_id: str) -> bool:
+        """Reject a pending privileged action without issuing a token."""
+        self._cleanup_expired_pending()
+        pending = self._pending_actions.pop(str(request_id).strip(), None)
+        if pending is None:
+            return False
+        self._audit_event(pending["tool"], pending["fingerprint"], "REJECTED")
+        return True
+
     # ============================================================
     # SECURITY HELPERS
     # ============================================================
@@ -634,6 +655,13 @@ class ToolExecutor:
 
         args = args or {}
 
+        # Enforce the emergency stop and offline policy BEFORE any tool routing.
+        from security.action_control import action_is_stopped, network_allowed
+        if action_is_stopped():
+            return "ACTION_STOPPED: Emergency block is engaged."
+        if not network_allowed(tool_name):
+            return "OFFLINE_MODE: Network-capable action is blocked."
+
         # Until a restricted Windows process runner is installed, never allow
         # arbitrary model-generated shell commands. Native user confirmation
         # alone is not an operating-system sandbox.
@@ -687,6 +715,9 @@ class ToolExecutor:
                 args,
             )
         )
+
+        if not self._audit_event(tool_name, request_fingerprint, "REQUESTED"):
+            return "AUDIT_UNAVAILABLE: Sensitive action blocked."
 
         command_text = (
             str(
@@ -771,6 +802,10 @@ class ToolExecutor:
                     )
                 )
 
+                if not self._audit_event(tool_name, request_fingerprint, "PENDING"):
+                    self._pending_actions.pop(request_id, None)
+                    return "AUDIT_UNAVAILABLE: Action request blocked."
+
                 return (
                     "TRUST_TOKEN_REQUIRED:"
                     f"{request_id}:"
@@ -800,10 +835,12 @@ class ToolExecutor:
 
         try:
 
-            return self._execute_actual(
+            result = self._execute_actual(
                 tool_name,
                 args,
             )
+            self._audit_event(tool_name, request_fingerprint, "RETURNED")
+            return result
 
         except Exception as exc:
 
@@ -811,6 +848,7 @@ class ToolExecutor:
                 "Tool execution failed: %s",
                 tool_name,
             )
+            self._audit_event(tool_name, request_fingerprint, "FAILED")
 
             return (
                 f"Tool execution failed: {exc}"
@@ -933,6 +971,9 @@ class ToolExecutor:
                 "Security request changed before "
                 "execution and was cancelled."
             )
+
+        if not self._audit_event(pending["tool"], pending["fingerprint"], "APPROVED"):
+            return "AUDIT_UNAVAILABLE: Authorization blocked."
 
         token = (
             self.permission_manager.grant_trust_token(
