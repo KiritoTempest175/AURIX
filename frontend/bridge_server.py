@@ -187,10 +187,17 @@ class BridgeHandler(BaseHTTPRequestHandler):
             resume_actions()
             return self._json({"stopped": False})
         if self.path == "/settings":
-            from security.action_control import set_offline_mode
-            if not isinstance(data.get("offline"), bool):
-                return self._json({"error": "INVALID_SETTINGS"}, 400)
-            return self._json({"offline": set_offline_mode(data["offline"])})
+            if set(data) == {"offline"} and type(data.get("offline")) is bool:
+                from security.action_control import set_offline_mode
+                return self._json({"offline": set_offline_mode(data["offline"])})
+            if set(data) == {"memory_enabled"} and type(data.get("memory_enabled")) is bool:
+                from ai_brain.secure_memory import set_memory_enabled
+                try:
+                    return self._json({"memory_enabled": set_memory_enabled(data["memory_enabled"])})
+                except Exception:
+                    LOG.exception("Memory opt-in preflight or save failed")
+                    return self._json({"error": "MEMORY_SETTINGS_UNAVAILABLE"}, 503)
+            return self._json({"error": "INVALID_SETTINGS"}, 400)
         if self.path == "/memory":
             from ai_brain.secure_memory import memory_enabled, get_memory_store, KINDS
             if not memory_enabled():

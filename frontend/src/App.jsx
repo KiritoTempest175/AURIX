@@ -232,6 +232,24 @@ export default function App() {
     return () => window.removeEventListener("keydown", keyDown);
   }, []);
 
+  const updateMemory = async () => {
+    if (!settings || !workerOnline || !isTauri()) return;
+    const next = !settings.memory_enabled;
+    if (next && !window.confirm("Enable persistent local memory? Future interactions may be stored in encrypted local files.")) {
+      return;
+    }
+    try {
+      const result = await invoke("set_memory_enabled", { enabled: next });
+      setSettings((old) => ({ ...old, memory_enabled: result.memory_enabled }));
+      setMemoryError(result.memory_enabled
+        ? "" : "Memory capture is disabled. Existing saved memories remain until deleted.");
+      if (result.memory_enabled) await loadMemories();
+      else setMemories([]);
+    } catch (error) {
+      setMemoryError(`Cannot update memory preference: ${String(error)}`);
+    }
+  };
+
   const updateOffline = async () => {
     try {
       const next = await invoke("set_offline_mode", { enabled: !settings.offline });
@@ -509,6 +527,11 @@ export default function App() {
               <>
                 <h2>Encrypted memory</h2>
                 <p>Stored locally with AES-GCM and a Windows DPAPI-wrapped key. Memory is opt-in.</p>
+                {!settings?.memory_enabled && (
+                  <button type="button" onClick={updateMemory} disabled={!workerOnline || !settings}>
+                    Enable local memory
+                  </button>
+                )}
                 {memoryError && <p role="alert">{memoryError}</p>}
                 {settings?.memory_enabled && (
                   <>
@@ -545,6 +568,14 @@ export default function App() {
                   <div><strong>Offline mode</strong><p>Blocks the agent's network-capable tools while enabled.</p></div>
                   <button onClick={updateOffline} disabled={!workerOnline || !settings}>
                     {settings?.offline ? "Offline: ON" : "Offline: OFF"}
+                  </button>
+                </div>
+                <div className="setting-line">
+                  <div><strong>Persistent memory</strong>
+                    <p>Encrypted on this Windows account. Turning off stops new memory capture; it does not delete existing records.</p>
+                  </div>
+                  <button onClick={updateMemory} disabled={!workerOnline || !settings}>
+                    {settings?.memory_enabled ? "Memory: ON" : "Memory: OFF"}
                   </button>
                 </div>
                 <div className="setting-line">

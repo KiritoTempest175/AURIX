@@ -58,3 +58,6 @@ The main pipeline now includes frontend Vitest telemetry tests and Python syntax
 ### Local text-to-speech (partial)
 
 The Windows-only Piper adapter in native_ui/audio/offline_tts.py synthesizes bounded, user-requested text from a locally installed voice model and Piper binary. A separate stop command cancels playback. This is not continuous wake-word processing, streaming responses, or automatic spoken greetings. Actual Windows/audio hardware validation is still necessary.
+
+### Memory privacy UI
+Memory capture may now be toggled in System and Memory views with an explicit consent prompt. The selected preference is saved privately to privacy-settings.json, with DPAPI preflight before enabling. This does not implement full memory backup, key rotation, vector search or guaranteed secure erasure.

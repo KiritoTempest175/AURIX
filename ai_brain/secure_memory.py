@@ -5,6 +5,7 @@ Non-Windows use is limited to tests that explicitly provide a 32-byte key.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets
@@ -21,12 +22,45 @@ _LOCK = threading.RLock()
 _STORE = None
 
 
+def _privacy_path() -> Path:
+    from security.config_loader import user_data_root
+    return user_data_root() / "privacy-settings.json"
+
+
 def memory_enabled() -> bool:
+    """A private explicit user preference overrides the packaged default."""
     try:
+        setting = _privacy_path()
+        if setting.is_file():
+            data = json.loads(setting.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and type(data.get("memory_enabled")) is bool:
+                return data["memory_enabled"]
+            return False
         from security.config_loader import load_config
         return load_config().get("memory", {}).get("enabled") is True
-    except (OSError, ValueError, ImportError):
+    except (OSError, ValueError, ImportError, json.JSONDecodeError):
+        # Privacy fail-closed: corrupt or unreadable settings disable memory.
         return False
+
+
+def set_memory_enabled(enabled: bool) -> bool:
+    """Persist the user's choice; test DPAPI before enabling memory capture."""
+    if type(enabled) is not bool:
+        raise TypeError("memory preference must be boolean")
+    if enabled:
+        root = _user_root()
+        root.mkdir(parents=True, exist_ok=True)
+        _master_key(root)
+
+    setting = _privacy_path()
+    setting.parent.mkdir(parents=True, exist_ok=True)
+    tmp = setting.with_name(setting.name + "." + secrets.token_hex(6) + ".tmp")
+    try:
+        tmp.write_text(json.dumps({"memory_enabled": enabled}), encoding="utf-8")
+        os.replace(tmp, setting)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return enabled
 
 
 def _user_root() -> Path:

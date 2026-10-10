@@ -121,3 +121,7 @@ Windows CI now runs Python byte-compilation, pytest, Rust compilation and tests,
 ## Offline Piper speech (optional)
 
 Install the Piper CLI locally and put a genuine .onnx voice model at the path specified by the audio.piper_model_path setting. The chat panel offers Speak last reply and Stop speech. Text is passed to Piper through standard input with no shell expansion. Local Windows playback is attempted only when synthesis succeeds. Missing dependencies and missing model files produce explicit error messages. Model weights are not downloaded automatically. Streaming TTS, barge-in detection, and a continuously listening wake-word workflow remain unimplemented.
+
+## Memory privacy preference
+
+The desktop System panel can enable or disable opt-in persistent memory without editing the bundled TOML file. The choice is atomically stored in the user's private AURIX application directory. Enabling requires successful DPAPI key access on Windows. Disabling prevents further memory retrieval and conversation persistence but leaves previously saved encrypted records untouched; delete them individually through Memory Explorer. No claim of secure deletion from physical storage backups is made.
