@@ -148,7 +148,13 @@ def draft_is_complete(body: str) -> bool:
     if _DRAFT_TEMPLATE.search(body):
         return False
     lowered = body.casefold()
-    return "insert project" not in lowered and "[your name]" not in lowered
+    unfinished = (
+        "insert project", "[your name]", "your name here",
+        "to be determined", "tbd", "insert details",
+        "placeholder", "project name: [",
+        "project budget: [", "project timeline: [",
+    )
+    return not any(token in lowered for token in unfinished)
 
 
 # ================================================================

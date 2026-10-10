@@ -48,14 +48,28 @@ $ErrorActionPreference = 'Stop'
 $engine = $null
 try {
     Add-Type -AssemblyName System.Speech
-    $culture = [System.Globalization.CultureInfo]::GetCultureInfo('en-US')
-    $engine = [System.Speech.Recognition.SpeechRecognitionEngine]::new($culture)
+    # Prefer an installed recognizer matching the current Windows language.
+    # Hardcoding en-US makes the mic fail on systems with other language packs.
+    $installed = @([System.Speech.Recognition.SpeechRecognitionEngine]::InstalledRecognizers())
+    if ($installed.Count -eq 0) { throw 'NO_INSTALLED_SPEECH_RECOGNIZER' }
+    $ui = [System.Globalization.CultureInfo]::CurrentUICulture
+    $choice = $installed | Where-Object { $_.Culture.Name -eq $ui.Name } | Select-Object -First 1
+    if (-not $choice) {
+        $choice = $installed | Where-Object { $_.Culture.TwoLetterISOLanguageName -eq 'en' } | Select-Object -First 1
+    }
+    if (-not $choice) { $choice = $installed | Select-Object -First 1 }
+    $engine = [System.Speech.Recognition.SpeechRecognitionEngine]::new($choice)
     $grammar = [System.Speech.Recognition.DictationGrammar]::new()
     $engine.LoadGrammar($grammar)
     $engine.SetInputToDefaultAudioDevice()
     $result = $engine.Recognize([TimeSpan]::FromSeconds(8))
-    if ($null -ne $result -and $result.Confidence -ge 0.76) {
-        [Console]::Out.Write($result.Text)
+    if ($null -ne $result) {
+        # Short unrelated words are often background-noise hallucinations.
+        $count = @($result.Text.Trim() -split '\s+').Count
+        $minConfidence = if ($count -le 2) { 0.84 } else { 0.77 }
+        if ($result.Confidence -ge $minConfidence) {
+            [Console]::Out.Write($result.Text)
+        }
     }
 } catch {
     exit 2

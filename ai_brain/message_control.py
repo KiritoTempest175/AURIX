@@ -833,7 +833,9 @@ class WhatsAppController:
         left = outer.left + int(max(outer.width(), 1) * 0.35)
         bottom = outer.top + min(120, max(70, int(max(outer.height(), 1) * .15)))
         labels = []
-        for kind in ("Text", "Button"):
+        # WhatsApp releases expose the chat title as Text, Button or Group;
+        # only inspect the top-right chat toolbar, never the conversation.
+        for kind in ("Text", "Button", "Group", "Hyperlink"):
             for element in window.descendants(control_type=kind):
                 try:
                     if not element.is_visible():
@@ -955,7 +957,8 @@ class WhatsAppController:
             "Selected chat could not be verified "
             f"as '{requested_contact}'. "
             f"Accessible toolbar labels: {preview}. "
-            "If the chat is open, maximize WhatsApp Desktop and retry."
+            "Open the exact contact in WhatsApp Desktop, maximize the window, "
+            "and retry. Sending is blocked until the recipient can be verified."
         )
 
     # ============================================================
