@@ -13,6 +13,7 @@ import os
 import secrets
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -63,6 +64,20 @@ class SecureServer(ThreadingHTTPServer):
         super().__init__(address, handler)
         self.token = token
         self.limit = threading.BoundedSemaphore(8)
+        self._rate_lock = threading.Lock()
+        self._tokens = 60.0
+        self._refill = time.monotonic()
+
+    def admit(self) -> bool:
+        """Bound native-worker mutations to 10/sec, allowing a short burst."""
+        with self._rate_lock:
+            now = time.monotonic()
+            self._tokens = min(60.0, self._tokens + (now - self._refill) * 10)
+            self._refill = now
+            if self._tokens < 1.0:
+                return False
+            self._tokens -= 1.0
+            return True
 
     def process_request(self, request, client_address):
         # Slow or idle clients must not hold a bounded worker thread forever.
@@ -85,6 +100,10 @@ class SecureServer(ThreadingHTTPServer):
 
 class BridgeHandler(BaseHTTPRequestHandler):
     server: SecureServer
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(5.0)
 
     def _json(self, value: dict, status: int = 200):
         raw = json.dumps(value, ensure_ascii=False).encode("utf-8")
@@ -115,6 +134,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
         )
 
     def _body(self) -> dict:
+        if self.headers.get("Transfer-Encoding") is not None:
+            raise ValueError("TRANSFER_ENCODING_UNSUPPORTED")
         size = self.headers.get("Content-Length")
         if size is None or not size.isdecimal():
             raise ValueError("CONTENT_LENGTH_REQUIRED")
@@ -202,6 +223,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._authorized():
             return self._json({"error": "UNAUTHORIZED"}, 401)
+        # Emergency blocking and speech interruption stay accessible during floods.
+        if self.path not in {"/kill", "/voice/stop"} and not self.server.admit():
+            return self._json({"error": "RATE_LIMITED"}, 429)
         try:
             data = self._body()
         except OverflowError:
@@ -325,7 +349,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
         if self.path not in ("/dispatch", "/trust_preview", "/execute_trust", "/reject_trust"):
             return self._json({"error": "NOT_FOUND"}, 404)
 
-        with _execute_lock:
+        if not _execute_lock.acquire(blocking=False):
+            return self._json({"error": "WORKER_BUSY"}, 409)
+        try:
             try:
                 brain = dispatcher()
                 if self.path == "/dispatch":
@@ -346,6 +372,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
             except Exception:
                 LOG.exception("Worker operation failed")
                 return self._json({"error": "WORKER_FAILURE"}, 500)
+        finally:
+            _execute_lock.release()
 
     def log_message(self, fmt, *args):
         LOG.debug(fmt, *args)

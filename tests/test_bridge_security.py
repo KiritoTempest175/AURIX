@@ -84,3 +84,25 @@ def test_worker_port_is_selected_from_validated_local_env(monkeypatch):
         monkeypatch.setenv("AURIX_BRIDGE_PORT", bad)
         with pytest.raises(ValueError, match="INVALID_BRIDGE_PORT"):
             bridge_port()
+
+
+def test_bridge_rejects_chunked_smuggling_even_with_content_length():
+    handler = object.__new__(BridgeHandler)
+    handler.headers = {
+        "Transfer-Encoding": "chunked",
+        "Content-Length": "2",
+    }
+    with pytest.raises(ValueError, match="TRANSFER_ENCODING_UNSUPPORTED"):
+        handler._body()
+
+
+def test_bridge_mutations_have_bounded_token_bucket():
+    import threading
+    import time
+    from frontend.bridge_server import SecureServer
+    server = object.__new__(SecureServer)
+    server._rate_lock = threading.Lock()
+    server._tokens = 1.0
+    server._refill = time.monotonic()
+    assert server.admit()
+    assert not server.admit()
