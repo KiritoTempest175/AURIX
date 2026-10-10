@@ -253,8 +253,8 @@ def test_app_controls(dispatcher):
         assert handled is True
 
 
-def test_shell_command_requires_confirmation():
-    """Shell commands must require explicit trust-token approval."""
+def test_shell_command_requires_sandbox():
+    """Unrestricted shell commands stay disabled until the OS sandbox ships."""
 
     executor = ToolExecutor()
 
@@ -266,6 +266,6 @@ def test_shell_command_requires_confirmation():
     )
 
     assert reply.startswith(
-        "TRUST_TOKEN_REQUIRED:"
+        "SHELL_DISABLED:"
     )
 
