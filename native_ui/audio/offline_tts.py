@@ -20,6 +20,7 @@ _LOCK = threading.RLock()
 _ACTIVE = False
 _CANCEL = threading.Event()
 _THREAD: Optional[threading.Thread] = None
+_NATIVE_PROC: Optional[subprocess.Popen] = None
 
 
 def _resources() -> tuple[str, Path]:
@@ -52,6 +53,13 @@ def is_speaking() -> bool:
 
 def stop() -> None:
     _CANCEL.set()
+    with _LOCK:
+        process = _NATIVE_PROC
+        if process is not None and process.poll() is None:
+            try:
+                process.terminate()
+            except OSError:
+                pass
     if os.name == "nt":
         try:
             import winsound
@@ -67,14 +75,21 @@ def speak_async(text: str) -> bool:
         raise ValueError("Speech must contain 1–800 characters")
     if os.name != "nt":
         raise RuntimeError("TTS_WINDOWS_REQUIRED")
-    executable, model = _resources()
+    try:
+        executable, model = _resources()
+    except RuntimeError:
+        # Windows ships speech synthesis voices on supported installations.
+        # This fallback needs no separately installed Piper runtime or model.
+        executable, model = None, None
     with _LOCK:
         if _ACTIVE:
             raise RuntimeError("TTS_BUSY")
         _CANCEL.clear()
         _ACTIVE = True
+        worker = _speak_worker if executable and model else _speak_windows_voice
+        args = (executable, model, text) if executable and model else (text,)
         _THREAD = threading.Thread(
-            target=_speak_worker, args=(executable, model, text), daemon=True,
+            target=worker, args=args, daemon=True,
             name="aurix-local-speech"
         )
         _THREAD.start()
@@ -108,4 +123,41 @@ def _speak_worker(executable: str, model: Path, text: str) -> None:
             except OSError:
                 LOG.warning("Temporary voice file could not be removed")
         with _LOCK:
+            _ACTIVE = False
+
+
+def _speak_windows_voice(text: str) -> None:
+    """Speak using Windows-installed local voices; no network or shell input."""
+    global _ACTIVE, _NATIVE_PROC
+    import base64
+    script = r"""
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Speech
+$voice = [System.Speech.Synthesis.SpeechSynthesizer]::new()
+try { $voice.Speak([Console]::In.ReadToEnd()) }
+finally { $voice.Dispose() }
+"""
+    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    process = None
+    try:
+        process = subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-NoLogo",
+             "-EncodedCommand", encoded],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8", shell=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        with _LOCK:
+            _NATIVE_PROC = process
+        process.communicate(input=text, timeout=45)
+        if process.returncode:
+            LOG.warning("Windows speech synthesis unavailable (exit %s)", process.returncode)
+    except (OSError, subprocess.TimeoutExpired):
+        LOG.warning("Local Windows speech synthesis could not complete")
+        if process is not None and process.poll() is None:
+            process.kill()
+    finally:
+        with _LOCK:
+            _NATIVE_PROC = None
             _ACTIVE = False
