@@ -1038,6 +1038,19 @@ class ToolExecutor:
     # SECURITY CATEGORY
     # ============================================================
 
+    @staticmethod
+    def _safe_desktop_app(target: str, operation: str) -> bool:
+        """Explicit low-risk application allowlist. No arbitrary binaries/URLs."""
+        if not isinstance(target, str):
+            return False
+        target = target.casefold().strip()
+        safe = {
+            "notepad", "calculator", "paint", "spotify", "whatsapp",
+            "chrome", "google chrome", "firefox", "edge", "microsoft edge",
+            "vscode", "vs code", "visual studio code", "discord",
+        }
+        return target in safe
+
     def _get_category(
         self,
         tool_name: str,
@@ -1069,13 +1082,13 @@ class ToolExecutor:
 
         mapping = {
 
-            # Until program launch is restricted to trusted executables,
-            # launching an app requires the user's native confirmation.
+            # Common, explicitly allowlisted programs are reversible low-risk
+            # actions. Unrecognized executables still require native approval.
             "open_app":
-                ActionCategory.SYSTEM_SETTING,
+                ActionCategory.APP_CONTROL if self._safe_desktop_app(args.get("target", ""), "open") else ActionCategory.SYSTEM_SETTING,
 
             "close_app":
-                ActionCategory.SYSTEM_SETTING,
+                ActionCategory.APP_CONTROL if self._safe_desktop_app(args.get("target", ""), "close") else ActionCategory.SYSTEM_SETTING,
 
             "play_media":
                 ActionCategory.APP_CONTROL,

@@ -159,6 +159,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 "installed": installed,
                 "recommendations": RECOMMENDED_MODELS,
             })
+        if self.path == "/email/configure":
+            from ai_brain.email_control import EmailController
+            return self._json(EmailController().credentials_status())
         if self.path == "/settings":
             from security.action_control import offline_mode, action_is_stopped
             from ai_brain.secure_memory import memory_enabled
@@ -222,6 +225,20 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 return self._json({"error": code}, 400)
             except (OSError, TimeoutError):
                 return self._json({"error": "OLLAMA_UNAVAILABLE"}, 503)
+        if self.path == "/email/configure":
+            from ai_brain.email_control import EmailController
+            ctrl = EmailController()
+            if data.get("action") == "remove" and set(data) == {"action"}:
+                return self._json({"removed": ctrl.remove_credentials()})
+            if set(data) != {"action", "address", "password"} or data.get("action") != "save":
+                return self._json({"error": "INVALID_CREDENTIAL_REQUEST"}, 400)
+            addr, password = data["address"], data["password"]
+            if (not isinstance(addr, str) or not isinstance(password, str)
+                or not 3 <= len(addr) <= 254 or not 8 <= len(password) <= 256):
+                return self._json({"error": "INVALID_CREDENTIALS"}, 400)
+            if not ctrl.save_credentials(addr, password):
+                return self._json({"error": "CREDENTIAL_SAVE_FAILED"}, 503)
+            return self._json(ctrl.credentials_status())
         if self.path == "/settings":
             if set(data) == {"offline"} and type(data.get("offline")) is bool:
                 from security.action_control import set_offline_mode

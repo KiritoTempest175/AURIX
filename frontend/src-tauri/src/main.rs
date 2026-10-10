@@ -484,6 +484,29 @@ async fn remove_ollama_model(
 }
 
 #[tauri::command]
+async fn email_configuration(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    local_get(&state, "/email/configure").await
+}
+
+#[tauri::command]
+async fn save_email_configuration(
+    address: String, password: String, state: State<'_, BridgeState>
+) -> Result<serde_json::Value, String> {
+    if address.len() > 254 || password.len() > 256 || address.len() < 3 || password.len() < 8 {
+        return Err("Invalid email credentials".into());
+    }
+    // Never log, cache in JavaScript state beyond submission, or return password.
+    local_post(&state, "/email/configure", serde_json::json!({
+        "action": "save", "address": address, "password": password
+    })).await
+}
+
+#[tauri::command]
+async fn remove_email_configuration(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    local_post(&state, "/email/configure", serde_json::json!({"action": "remove"})).await
+}
+
+#[tauri::command]
 async fn get_ui_settings(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
     local_get(&state, "/settings").await
 }
@@ -596,7 +619,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_telemetry, get_bridge_telemetry, get_bridge_health, get_worker_diagnostics,
             restart_ai_worker, send_message, execute_trust,
-            get_ui_settings, set_offline_mode, set_memory_enabled, list_memories, add_memory, delete_memory,
+            get_ui_settings, set_offline_mode, set_memory_enabled,
+            email_configuration, save_email_configuration, remove_email_configuration, list_memories, add_memory, delete_memory,
             listen_voice, speak_text, stop_speech,
             kill_actions, resume_actions, list_activity, reject_trust,
             get_telemetry_history, export_telemetry_csv,

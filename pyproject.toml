@@ -63,6 +63,13 @@ dev = [
 
 gguf = ["llama-cpp-python>=0.3.0"]
 
+# Installed inside packaged Windows desktop builds; no separate user pip setup.
+desktop = [
+    "pyautogui>=0.9.54; platform_system == 'Windows'",
+    "sounddevice>=0.4.6; platform_system == 'Windows'",
+    "faster-whisper>=1.0.0; platform_system == 'Windows'",
+]
+
 # Legacy research dependencies. AURIX's normal desktop workflow does not train.
 training = [
     "torch>=2.2.0",

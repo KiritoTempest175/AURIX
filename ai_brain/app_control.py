@@ -121,7 +121,11 @@ class AppLauncher:
                 except Exception as e:
                     logger.error("AppLauncher: PATH launch failed: %s", e)
 
-        # 6. Fallback to PyAutoGUI
+        # 6. WhatsApp must open without GUI automation dependencies.
+        # If the protocol is unavailable, the browser offers login explicitly.
+        if IS_WINDOWS and lower in {"whatsapp", "whatsapp app"}:
+            return self._open_url("https://web.whatsapp.com/")
+        # 7. Fallback for an unrecognized app name (advanced usage).
         if IS_WINDOWS and PYAUTOGUI_AVAILABLE:
             return self._launch_via_pyautogui(raw)
 
@@ -298,7 +302,12 @@ class AppCloser:
                     continue
 
                 # Match against the TRANSLATED search_target, not the raw input
-                if search_target in proc_name_lower:
+                # Exact process name, never substring-match arbitrary programs.
+                aliases = {"chrome": "chrome", "google chrome": "chrome",
+                           "vs code": "code", "visual studio code": "code",
+                           "whatsapp": "whatsapp", "spotify": "spotify"}
+                match = aliases.get(search_target, search_target).removesuffix(".exe")
+                if proc_stem == match:
                     proc.terminate()
                     killed_count += 1
             except (psutil.NoSuchProcess, psutil.AccessDenied) as e:

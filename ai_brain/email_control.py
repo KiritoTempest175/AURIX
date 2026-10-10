@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Optional, Protocol
+from security.config_loader import user_data_root
 
 
 # ================================================================
@@ -138,19 +139,14 @@ class EmailController:
 
     def __init__(
         self,
-        cred_file: str = os.path.join(
-            "data",
-            "smtp_creds.enc",
-        ),
+        cred_file: str | None = None,
     ) -> None:
 
-        self.cred_file = cred_file
+        self.cred_file = str(cred_file or (user_data_root() / "secrets" / "smtp_creds.dpapi"))
 
-        self.encryptor = (
-            get_default_encryptor()
-            if get_default_encryptor
-            else None
-        )
+        # Legacy fallback is used only for older non-DPAPI ciphertexts.
+        # Avoid persisting a second, weakly protected global AES key on Windows.
+        self.encryptor = get_default_encryptor() if os.name != "nt" and get_default_encryptor else None
 
     # ============================================================
     # VALIDATION
@@ -361,12 +357,7 @@ class EmailController:
     ]:
         """Load and decrypt stored SMTP credentials."""
 
-        if (
-            not os.path.exists(
-                self.cred_file
-            )
-            or not self.encryptor
-        ):
+        if not os.path.exists(self.cred_file):
             return None
 
         try:
@@ -378,14 +369,17 @@ class EmailController:
 
                 encrypted = file.read()
 
-            decrypted = (
-                self.encryptor.decrypt_bytes(
-                    encrypted
-                )
-                .decode(
-                    "utf-8"
-                )
-            )
+            if encrypted.startswith(b"AURIX-DPAPI-1:"):
+                if os.name != "nt":
+                    return None
+                import win32crypt
+                decrypted = win32crypt.CryptUnprotectData(
+                    encrypted[len(b"AURIX-DPAPI-1:"):], None, None, None, 0
+                )[1].decode("utf-8")
+            elif self.encryptor:
+                decrypted = self.encryptor.decrypt_bytes(encrypted).decode("utf-8")
+            else:
+                return None
 
             parts = decrypted.split(
                 "|",
@@ -449,12 +443,7 @@ class EmailController:
     ) -> bool:
         """Encrypt and store SMTP credentials."""
 
-        if not self.encryptor:
-
-            logger.error(
-                "Encryption engine unavailable."
-            )
-
+        if os.name != "nt" and not self.encryptor:
             return False
 
         try:
@@ -515,20 +504,26 @@ class EmailController:
                 )
             )
 
-            encrypted = (
-                self.encryptor.encrypt_bytes(
-                    payload
+            if os.name == "nt":
+                import win32crypt
+                encrypted = b"AURIX-DPAPI-1:" + win32crypt.CryptProtectData(
+                    payload, "AURIX SMTP credentials", None, None, None, 0
                 )
-            )
+            else:
+                encrypted = self.encryptor.encrypt_bytes(payload)
 
-            with open(
-                self.cred_file,
-                "wb",
-            ) as file:
-
-                file.write(
-                    encrypted
-                )
+            # Atomic replacement avoids incomplete or plaintext credential files.
+            import secrets
+            temporary = self.cred_file + "." + secrets.token_hex(8) + ".tmp"
+            try:
+                with open(temporary, "xb") as stream:
+                    stream.write(encrypted)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, self.cred_file)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
 
             logger.info(
                 "SMTP credentials saved securely."
@@ -548,6 +543,20 @@ class EmailController:
     # ============================================================
     # EMAIL DELIVERY
     # ============================================================
+
+    def remove_credentials(self) -> bool:
+        try:
+            os.unlink(self.cred_file)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return False
+        return True
+
+    def credentials_status(self) -> dict:
+        # Never return the secret or raw ciphertext to the frontend.
+        pair = self._get_credentials()
+        return {"configured": bool(pair), "address": pair[0] if pair else ""}
 
     def send_email(
         self,

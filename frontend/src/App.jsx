@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { summarizeMetric } from "./utils/telemetry.mjs";
 import ModelsPanel from "./components/ModelsPanel.jsx";
+import EmailPanel from "./components/EmailPanel.jsx";
 
 // The session credential never enters JavaScript; only native commands can
 // access the authenticated Python worker.
@@ -152,6 +153,9 @@ export default function App() {
   const [auditEvents, setAuditEvents] = useState([]);
   const [auditVerified, setAuditVerified] = useState(null);
   const [speechStatus, setSpeechStatus] = useState("");
+  const greeted = useRef(false);
+  const [greeting, setGreeting] = useState("Initializing local assistant…");
+  const [micError, setMicError] = useState("");
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -167,6 +171,21 @@ export default function App() {
         setWorkerOnline(Boolean(ready));
         if (ready) {
           setWorkerIssue(null);
+          if (!greeted.current) {
+            greeted.current = true;
+            const intro = "Hello. LUNA is online and ready.";
+            setGreeting(intro);
+            setMessages(m => [...m, { from: "aurix", text: intro }]);
+            // WebView2 provides platform voice output when available.
+            // Greeting is not blocked by an optional Piper model.
+            try {
+              if ("speechSynthesis" in window && "SpeechSynthesisUtterance" in window) {
+                const say = new window.SpeechSynthesisUtterance(intro);
+                say.rate = 1.04;
+                window.speechSynthesis.speak(say);
+              }
+            } catch { /* Keep visual greeting when system speech is missing. */ }
+          }
         } else {
           const detail = await invoke("get_worker_diagnostics").catch(() => null);
           if (active) setWorkerIssue(detail);
@@ -396,6 +415,7 @@ export default function App() {
   };
 
   const handleMicPress = async () => {
+    setMicError("");
     if (status !== "standby") return;
     if (!isTauri()) {
       setMessages((m) => [...m, { from: "aurix", text: "Microphone requires the desktop app." }]);
@@ -412,8 +432,9 @@ export default function App() {
         }]);
       }
     } catch (error) {
+      setMicError(`Microphone couldn't start. ${String(error)}. Check Windows microphone privacy settings and install a local speech model if required.`);
       setMessages((m) => [...m, {
-        from: "aurix", text: `Voice unavailable: ${String(error)}`,
+        from: "aurix", text: "Microphone unavailable. Review the Voice setup in System controls.",
       }]);
     } finally {
       setStatus("standby");
@@ -465,7 +486,7 @@ export default function App() {
         </div>
 
         <nav className="nav-list">
-          {["Command", "Models", "Telemetry", "Memory", "System", "Activity"].map((item) => (
+          {["Command", "Models", "Email", "Telemetry", "Memory", "System", "Activity"].map((item) => (
             <button key={item} className={`nav-item ${activeView === item ? "is-active" : ""}`} onClick={() => setActiveView(item)} aria-current={activeView === item ? "page" : undefined}>
               <span className="nav-dot" />
               {item}
@@ -482,7 +503,7 @@ export default function App() {
       {/* Center stage */}
       <main className="stage">
         <header className="stage-header">
-          <span className="date">
+          <span className="date">AURIX / LUNA · {greeting.startsWith("Hello") ? "SYSTEM READY" : "STARTING"} · 
             {new Date().toLocaleDateString("en-US", {
               weekday: "short",
               day: "numeric",
@@ -528,14 +549,19 @@ export default function App() {
           </div>
         </div>
 
-        <p className="prompt">What can I help you with?</p>
+        <div className="command-intro"><span className="section-eyebrow">YOUR PRIVATE DESKTOP COPILOT</span><h1>What can I do for you?</h1><p>{greeting}</p></div>
+        <div className="quick-actions" aria-label="Quick assistant commands">
+          {["Open WhatsApp", "Open calculator", "Open notepad"].map(command =>
+            <button type="button" key={command} disabled={!workerOnline || status !== "standby"}
+              onClick={() => sendText(command)}>{command}</button>)}
+        </div>
 
         <div className="listen-block">
           <Waveform active={status === "listening"} />
           <button
             className={`mic-btn mic-${status}`}
             onClick={handleMicPress}
-            aria-label="Transcribe microphone with local Whisper" disabled={status !== "standby"}
+            aria-label="Start microphone transcription" disabled={status !== "standby"}
           >
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
               <path
@@ -554,6 +580,8 @@ export default function App() {
           <span className={`listen-status status-${current.tone}`}>
             {status === "processing" ? "Processing…" : current.label}
           </span>
+          <p className="listen-hint">Press the microphone to talk. Speech recognition uses local services where configured.</p>
+          {micError && <p className="voice-error" role="alert">{micError}</p>}
         </div>
 
           </>
@@ -561,6 +589,9 @@ export default function App() {
           <section className="workspace-panel" aria-label={activeView}>
             {activeView === "Models" && (
               <ModelsPanel workerOnline={workerOnline} offline={settings?.offline ?? true} />
+            )}
+            {activeView === "Email" && (
+              <EmailPanel workerOnline={workerOnline} offline={settings?.offline ?? true} />
             )}
             {activeView === "Telemetry" && (
               <>
@@ -622,6 +653,12 @@ export default function App() {
             {activeView === "System" && (
               <>
                 <h2>System controls</h2>
+                <div className="setting-line">
+                  <div><strong>Voice & microphone</strong>
+                    <p>Click the microphone to record a local speech segment. Windows microphone access must be enabled. An offline Whisper model is needed for the current speech backend.</p>
+                  </div>
+                  <button type="button" onClick={handleMicPress} disabled={!workerOnline || status !== "standby"}>Test microphone</button>
+                </div>
                 <p>Worker: {workerOnline ? "Connected" : "Disconnected"}. Ollama model installation and selection are managed in the Models panel.</p>
                 <div className="setting-line">
                   <div><strong>Offline mode</strong><p>Blocks the agent's network-capable tools while enabled.</p></div>
