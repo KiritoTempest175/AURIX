@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Mutex;
+use std::time::Instant;
 use std::time::Duration;
 use sysinfo::System;
 use tauri::{Emitter, Manager, State};
@@ -203,10 +204,22 @@ fn check_response(status: reqwest::StatusCode) -> Result<(), String> {
 
 #[derive(Clone, Serialize)]
 struct Telemetry { cpu: f32, ram: f32, gpu: Option<f32>, gpu_temp: Option<f32>, vram_mb: Option<f32> }
-struct SysState(Mutex<System>);
+struct SysState {
+    system: Mutex<System>,
+    cached: Mutex<Option<(Instant, Telemetry)>>,
+}
 
 fn sample_telemetry(state: &SysState) -> Telemetry {
-    let mut sys = state.0.lock().expect("telemetry mutex poisoned");
+    // sysinfo CPU usage requires time between refreshes. Rapid reads can show
+    // a false 100% on Windows. Share the last measurement with UI/history.
+    if let Ok(cache) = state.cached.lock() {
+        if let Some((timestamp, value)) = cache.as_ref() {
+            if timestamp.elapsed() < Duration::from_millis(1800) {
+                return value.clone();
+            }
+        }
+    }
+    let mut sys = state.system.lock().expect("telemetry mutex poisoned");
     sys.refresh_cpu_usage();
     sys.refresh_memory();
     let ram = sys.used_memory() as f32 / sys.total_memory().max(1) as f32 * 100.0;
@@ -223,7 +236,16 @@ fn sample_telemetry(state: &SysState) -> Telemetry {
         },
         Err(_) => (None, None, None),
     };
-    Telemetry { cpu: sys.global_cpu_usage(), ram, gpu, gpu_temp, vram_mb }
+    let raw_cpu = sys.global_cpu_usage().clamp(0.0, 100.0);
+    // Smooth sample-to-sample spikes without clamping sustained load.
+    let mut cache = state.cached.lock().expect("telemetry cache mutex poisoned");
+    let cpu = match cache.as_ref() {
+        Some((_, previous)) => 0.55 * raw_cpu + 0.45 * previous.cpu,
+        None => raw_cpu,
+    };
+    let snapshot = Telemetry { cpu, ram, gpu, gpu_temp, vram_mb };
+    *cache = Some((Instant::now(), snapshot.clone()));
+    snapshot
 }
 
 #[tauri::command]
@@ -617,7 +639,10 @@ fn main() {
         .redirect(reqwest::redirect::Policy::none())
         .build().expect("Unable to create local HTTP client");
     tauri::Builder::default()
-        .manage(SysState(Mutex::new(System::new_all())))
+        .manage(SysState {
+            system: Mutex::new(System::new_all()),
+            cached: Mutex::new(None),
+        })
         .setup(|app| {
             let directory = app.path().app_data_dir()?;
             let store = TelemetryStore::open(&directory).map_err(std::io::Error::other)?;
