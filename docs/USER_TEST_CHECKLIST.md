@@ -1,73 +1,64 @@
 # AURIX / LUNA — Windows user acceptance checklist
 
-Release candidate: **v0.2.0 preview**. Record the exact release tag and Windows version
-when reporting failures. The app is an *unsigned test build*, not a certified
-production release. The installer includes its own desktop worker; a user
-should not install Python, Node, Rust or a separate PyAutoGUI package.
+Build: newest **v0.2.0-preview** on https://github.com/KiritoTempest175/AURIX/releases
+Do not use the older v0.1 package for these tests. Work only with your own
+test files and accounts. Record **Pass / Fail / Not tested**, Windows version,
+exact installer filename and a screenshot or redacted worker log for failures.
 
-## P0 — Install and first run
+## Installer & startup
+- [ ] Close and uninstall the older preview, then install the new EXE on Windows.
+- [ ] Run AURIX without Python, Node.js, Rust, Git or a command prompt.
+- [ ] Worker shows connected and LUNA greets once in chat and (when spoken replies ON) speaks.
+- [ ] Shut down/reopen AURIX 3 times: no stuck worker or port conflict.
 
-- [ ] Download the latest v0.2.0 preview .exe from GitHub Releases (not old v0.1).
-- [ ] Close and uninstall an older AURIX preview, then install the new build.
-- [ ] Launch AURIX without opening a terminal or developer tools.
-- [ ] See **Worker connected** and the initial LUNA greeting.
-- [ ] Hear a startup greeting if Windows has a working voice output device.
-- [ ] Navigate every panel (Models, Email, Telemetry, Memory, System, Activity).
-- [ ] Scroll Models and System to the end, including at minimum window size.
-- [ ] Exit AURIX, reopen, and confirm preferences persist.
+## UI & performance
+- [ ] Main area and right chat/status panes scroll at 880x560 and maximized.
+- [ ] Brand mark/icon appear in the main app and Windows installer.
+- [ ] Open Permissions, change safe-app permission, restart, verify it is saved.
+- [ ] Known allowed apps open without approval; unfamiliar executables still require it.
+- [ ] Compare AURIX CPU/RAM telemetry with Windows Task Manager after 10–20 seconds.
+- [ ] Compare GPU/GPU temperature with vendor tools when supported; unsupported GPU may show N/A.
+- [ ] Export telemetry CSV and inspect timestamps / non-fabricated values.
 
-## P0 — Ollama and local conversation
+## AI
+- [ ] In Models, install Ollama and download a local model through the UI.
+- [ ] Ask LUNA a complex question and a follow-up; replies are locally generated.
+- [ ] Ask for model change; restart AURIX and confirm selection persists.
+- [ ] Switch offline mode ON: installed model still responds without cloud API.
 
-- [ ] Models panel offers **Enable model downloads**; Ollama can install using only UI.
-- [ ] Start/detect Ollama from the app or Windows startup.
-- [ ] Download a small recommended free local model (e.g. gemma3:1b).
-- [ ] Progress and errors are displayed while downloading.
-- [ ] Activate the model; LUNA answers a factual question without a cloud AI account.
-- [ ] Have a 5-turn conversation; verify follow-up context stays coherent.
-- [ ] Restart the app; the chosen model remains active.
-- [ ] Disable internet and verify the installed model still responds.
-- [ ] After about 30 seconds idle, Ollama can release model VRAM/RAM as configured.
+## Voice
+- [ ] Spoken replies ON: ask 5 text questions and hear 5 responses; choose OFF and hear none.
+- [ ] Female voice is used when Windows has an installed female voice; record actual voice.
+- [ ] Test push-to-talk with quiet background, then with ambient noise.
+- [ ] Say "Hey Luna" only after opting into background listening; verify greeting/reply.
+- [ ] With wake listener ON, use mic button repeatedly; no VOICE_BUSY or stuck microphone.
+- [ ] Test Roman Urdu and English; log misrecognized short fragments without sending them as commands.
+- [ ] Verify LUNA does not re-trigger herself from her own speaker audio.
 
-## P0 — Voice and resource measurements
+## Email
+- [ ] Configure Gmail address + app password in Email (do not send password or logs to ChatGPT).
+- [ ] Ask for proposal with missing project details: expect clarification, NOT fabricated fields.
+- [ ] Email containing [Project Name] / [Your Name] must be blocked before sending.
+- [ ] Send a complete approved test message only to an account you control; verify subject and body.
+- [ ] Test rejecting the native approval; no email is sent.
+- [ ] Disconnect the saved email account; verify sending is no longer automatic.
 
-- [ ] Click mic, speak a simple instruction; transcription appears.
-- [ ] Use System to opt in to Hey Luna; say 'Hey Luna' and get a response.
-- [ ] Give a follow-up instruction without clicking the mic.
-- [ ] Switch wake listening OFF and confirm the microphone is not continuously captured.
-- [ ] Stop speaking output and use 'Hey Luna stop' for emergency action blocking.
-- [ ] Confirm CPU%, RAM%, supported GPU% and GPU temperature are shown without fabricated data.
-- [ ] Telemetry history persists after restart and CSV exports open correctly.
-- [ ] Measure idle CPU/RAM with Ollama installed and one model downloaded.
+## WhatsApp Desktop
+- [ ] Open WhatsApp using LUNA; select a test chat with explicit contact name.
+- [ ] Ask LUNA to send a short text to the known contact; confirm delivery in that chat.
+- [ ] Repeat with a different contact; verify LUNA never sends to a wrong/unverified chat.
+- [ ] Test non-ASCII text via paste, and confirm previous clipboard is restored.
+- [ ] If it reports "Cannot verify toolbar" or "Cannot locate message composer",
+      send UI-version details/screenshots; **do not disable recipient verification**.
+- [ ] WhatsApp calls and voice-note automation are NOT release-certified and require
+      separate real WhatsApp acceptance tests; do not assume success from a simulated reply.
 
-## P1 — Local tasks and safety
+## Memory and security
+- [ ] Opt in to encrypted memory; save a harmless fact, restart, then recall it.
+- [ ] Emergency block and approval rejection prevent changes.
+- [ ] Destructive edits, outbound communications and unknown software require exact-action approval.
+- [ ] Check Activity for accurate execution/failure events.
 
-- [ ] 'Open calculator' and 'close calculator' (no unnecessary confirmation).
-- [ ] Open and close WhatsApp; confirm it does not require user-installed PyAutoGUI.
-- [ ] Create a test folder/file, read, rename, copy and move them.
-- [ ] Delete only a throwaway test file and verify the requested confirmation.
-- [ ] Attempt a dangerous operation and verify LUNA does not silently execute it.
-- [ ] Test scoped Git status, commit and push in a disposable repository.
-- [ ] Confirm 'push it' asks for repo context rather than guessing the wrong project.
-- [ ] Review an installation request; confirm no untrusted installer executes silently.
-- [ ] Connect a test Gmail app password in Email, then disconnect and confirm it is removed.
-- [ ] Draft and send an email to your own test address with clear recipient/body approval.
-- [ ] Send a WhatsApp message to a consenting test contact with explicit approval.
-- [ ] Test WhatsApp call/voice-note features only where explicitly supported; log unavailable features honestly.
-- [ ] Opt into memory, save a preference, restart, retrieve it and delete it.
-- [ ] Trigger emergency stop while an action is awaiting approval; resume and confirm the old approval is invalid.
-
-## Known limitations — not accepted as production-ready
-
-- Live WhatsApp **calling and voice-note automation** requires app-version-specific Windows testing and is not certified.
-- Arbitrary terminal commands, package installation, Antigravity IDE control and unattended destructive changes are not safe to claim fully implemented without OS sandbox and real integrations.
-- Only Ollama inference is active, and an Ollama model download initially requires network access and disk space.
-- Background wake detection requires an installed Windows speech engine and microphone consent; audio drivers vary.
-- Authenticated loopback HTTP is still used between Rust and Python; protected native IPC is pending.
-- The build is unsigned, lacks a certified updater, and has not passed an independent security audit.
-
-## Reporting a failed check
-
-Record: release tag, Windows version, CPU/GPU/RAM, feature name, steps,
-expected behavior, actual behavior, and a redacted excerpt of
-`%LOCALAPPDATA%\AURIX\logs\worker.log`. Never send app passwords, tokens,
-private chat messages or memory database files.
+**If any item fails:** capture only the specific screen and the relevant lines in
+`%LOCALAPPDATA%\AURIX\logs\worker.log`, after removing addresses, passwords,
+tokens and private messages. A passing CI run cannot replace hardware tests.

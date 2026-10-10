@@ -105,9 +105,16 @@ jobs:
           }
           $checksums | Set-Content -Path 'SHA256SUMS.txt' -Encoding utf8
           @'
-          # AURIX 0.2 — Windows desktop preview
+          # AURIX 0.2 — LUNA voice & desktop-control testing preview
 
-          Unsigned development build for Windows 10/11 testing, not a production release.
+          Unsigned Windows build for hands-on testing, not a certified production release.
+
+          Updated: safer WhatsApp recipient verification, stricter email draft
+          validation, Windows female voice preference, spoken replies toggle,
+          wake/mic coordination, CPU sampling stability, persisted Permissions
+          panel, and refreshed AURIX branding.
+
+          Full manual acceptance checklist: docs/USER_TEST_CHECKLIST.md on main.
 
           **Install:** Download the .exe (NSIS installer) or .msi from Assets below. You do not need to install both.
 

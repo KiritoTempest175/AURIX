@@ -157,3 +157,13 @@ The chosen Ollama local model, when used, is downloaded explicitly from the app.
 ## Windows acceptance testing
 
 Use [the end-user test checklist](docs/USER_TEST_CHECKLIST.md) after downloading the newest **v0.2.x-preview** from [Releases](https://github.com/KiritoTempest175/AURIX/releases). The older v0.1 preview does not contain the newest repairs. Unchecked items are **not evidence of working features**.
+
+## LUNA desktop acceptance checks
+
+After installing the latest [AURIX preview](https://github.com/KiritoTempest175/AURIX/releases),
+follow [the Windows test checklist](docs/USER_TEST_CHECKLIST.md). This includes
+voice accuracy, a female system voice where installed, correct recipient
+verification on WhatsApp Desktop, safe email drafting, CPU comparisons to Task
+Manager, and the new permission settings. External-message and deletion
+approvals remain required for safety. WhatsApp voice-note/call behavior is not
+certified across WhatsApp versions and should not be presented as such.
