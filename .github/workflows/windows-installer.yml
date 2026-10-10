@@ -10,6 +10,7 @@ on:
       - 'frontend/bridge_server.py'
       - 'frontend/src/**'
       - 'pyproject.toml'
+      - 'docs/USER_TEST_CHECKLIST.md'
 concurrency:
   group: aurix-windows-preview-${{ github.ref }}
   cancel-in-progress: true

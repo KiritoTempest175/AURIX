@@ -6,7 +6,7 @@ AURIX is an **experimental Windows desktop AI assistant**. The application UI is
 
 ## Implemented in the current repository
 
-- Inference-only local desktop chat routed to user-selected Ollama or direct GGUF models. Ollama manages local model storage and supported GPU/CPU acceleration.
+- Inference-only local desktop chat with **Ollama as the only model runtime**. The user chooses which free model to download in the Models panel; no QLoRA or API key required.
 - Rust telemetry for CPU/RAM and, when supported, GPU utilization, temperature and VRAM. Raw data persists in an app-local SQLite database for 24 hours, one-minute aggregates for 30 days and hourly aggregates without automatic expiry. A telemetry history chart shows 1h/24h/7d and can export CSV to app data. No per-process GPU ownership is claimed.
 - Desktop application and file tool implementations with action-level permission requests.
 - Single-use, fingerprint-bound pending action tokens, with a Windows native confirmation dialog for requests made through the Tauri UI.
@@ -152,3 +152,8 @@ test, device microphone verification, or a security certification**.
 The default Python requirements are intentionally small. Optional research
 libraries live in `.[dev]` and are not bundled into ordinary desktop builds.
 The chosen Ollama local model, when used, is downloaded explicitly from the app.
+
+
+## Windows acceptance testing
+
+Use [the end-user test checklist](docs/USER_TEST_CHECKLIST.md) after downloading the newest **v0.2.x-preview** from [Releases](https://github.com/KiritoTempest175/AURIX/releases). The older v0.1 preview does not contain the newest repairs. Unchecked items are **not evidence of working features**.
