@@ -431,14 +431,18 @@ export default function App() {
           backend: result.backend || "unavailable", error: result.error || "",
         });
         for (const event of result.events || []) {
+          if (event.kind === "command" && event.command) {
+            void sendText(event.command);
+            continue;
+          }
           if (event.kind !== "wake") continue;
           if (event.command) {
             void sendText(event.command);
           } else {
-            setMessages(items => [...items, { from: "aurix", text: "Yes, I'm listening. Press the mic and tell me what you need." }]);
+            setMessages(items => [...items, { from: "aurix", text: "Yes. Listening for your next command…" }]);
             try {
               if ("speechSynthesis" in window && "SpeechSynthesisUtterance" in window) {
-                window.speechSynthesis.speak(new window.SpeechSynthesisUtterance("Yes, I'm listening."));
+                window.speechSynthesis.speak(new window.SpeechSynthesisUtterance("Yes?"));
               }
             } catch {}
           }
