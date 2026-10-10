@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - '.github/workflows/windows-installer.yml'
       - 'installer/**'
       - 'frontend/src-tauri/**'
       - 'frontend/bridge_server.py'
