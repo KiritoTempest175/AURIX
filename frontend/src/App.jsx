@@ -179,8 +179,7 @@ export default function App() {
     invoke("list_model_choices").then((models) => {
       if (!active) return;
       if (models.backend === "ollama" &&
-          !Array.isArray(models.installed) ||
-          (models.backend === "ollama" &&
+          (!Array.isArray(models.installed) ||
            !models.installed.includes(models.selected))) {
         setActiveView((current) => current === "Command" ? "Models" : current);
       }
