@@ -102,12 +102,14 @@ function Bar({ label, value, unit = "%", accent = "var(--accent)" }) {
           {value == null ? null : <span className="bar-unit">{unit}</span>}
         </span>
       </div>
-      <div className="bar-track">
-        <div
-          className="bar-fill"
-          style={{ width: `${Math.min(100, Math.max(0, value ?? 0))}%`, background: accent }}
-        />
-      </div>
+      {unit === "%" && (
+        <div className="bar-track">
+          <div
+            className="bar-fill"
+            style={{ width: `${Math.min(100, Math.max(0, value ?? 0))}%`, background: accent }}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -800,15 +802,15 @@ export default function App() {
             </div>
             <div className="status-item">
               <span>Neural link</span>
-              <b>Unverified</b>
+              <b>{workerOnline ? "Configured in Models" : "Waiting for worker"}</b>
             </div>
             <div className="status-item">
               <span>Security</span>
-              <b>Native approval</b>
+              <b>Risk-based confirmation</b>
             </div>
             <div className="status-item">
               <span>Network</span>
-              <b>Local only</b>
+              <b>{settings?.offline === false ? "Network enabled" : "Offline mode"}</b>
             </div>
           </div>
         </section>
