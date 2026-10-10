@@ -820,6 +820,10 @@ class ToolExecutor:
                     "created_at":
                         now,
 
+                    "stop_generation": __import__(
+                        "security.action_control", fromlist=["action_generation"]
+                    ).action_generation(),
+
                     "expires_at":
                         (
                             now
@@ -896,6 +900,10 @@ class ToolExecutor:
         pending = self._pending_actions.get(str(request_id).strip())
         if not pending:
             return {"error": "NOT_FOUND"}
+        from security.action_control import action_generation, action_is_stopped
+        if action_is_stopped() or pending.get("stop_generation") != action_generation():
+            self._pending_actions.pop(str(request_id).strip(), None)
+            return {"error": "ACTION_STOPPED"}
         return {
             "request_id": str(request_id).strip(),
             "description": self._describe_action(pending["tool"], pending["args"]),
@@ -947,6 +955,11 @@ class ToolExecutor:
                 "Security request expired "
                 "or no longer exists."
             )
+
+        from security.action_control import action_generation, action_is_stopped
+        if action_is_stopped() or pending.get("stop_generation") != action_generation():
+            self._pending_actions.pop(request_id, None)
+            return "Approval cancelled by emergency stop. Request the action again."
 
         if (
             time.time()

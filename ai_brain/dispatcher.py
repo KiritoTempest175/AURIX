@@ -59,6 +59,11 @@ class BrainDispatcher:
             ".,!?"
         )
 
+        if lower in {"luna stop", "hey luna stop", "aurix stop", "emergency stop"}:
+            from security.action_control import stop_actions
+            stop_actions()
+            return "Emergency block enabled. New actions and speech are stopped.", True
+
         # Wake phrases are deterministic because
         # calling an LLM here would be unnecessary.
         if lower in self._WAKE_PHRASES:
