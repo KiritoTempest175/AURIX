@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 LOG = logging.getLogger("aurix.inference.gguf")
-ROOT = Path(__file__).resolve().parents[2]
+from security.config_loader import program_root, user_data_root, load_config
+ROOT = program_root()
 ALLOWED_TOOLS = {
     "general_answer", "open_app", "close_app", "play_media", "web_search",
     "youtube", "send_email", "send_whatsapp_message", "make_whatsapp_call",
@@ -25,17 +26,7 @@ ALLOWED_TOOLS = {
 
 
 def _config() -> dict:
-    try:
-        import sys
-        if sys.version_info >= (3, 11):
-            import tomllib
-        else:
-            import tomli as tomllib
-        with (ROOT / "config.toml").open("rb") as stream:
-            return tomllib.load(stream).get("llm", {})
-    except (OSError, ValueError, ImportError) as exc:
-        LOG.warning("GGUF config unavailable: %s", type(exc).__name__)
-        return {}
+    return load_config().get("llm", {})
 
 
 def _local_path(raw: object) -> Optional[Path]:
@@ -43,7 +34,8 @@ def _local_path(raw: object) -> Optional[Path]:
         return None
     p = Path(raw).expanduser()
     if not p.is_absolute():
-        p = ROOT / p
+        user_path = user_data_root() / p
+        p = user_path if user_path.is_file() else ROOT / p
     p = p.resolve()
     return p if p.is_file() and p.suffix.lower() == ".gguf" else None
 

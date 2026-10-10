@@ -53,6 +53,20 @@ fn discover_root() -> Option<PathBuf> {
     None
 }
 
+/// An installer-built PyInstaller one-file sidecar is deployed beside AURIX.exe.
+/// Never fetch or run executables from arbitrary locations.
+fn spawn_bundled_worker(token: &str) -> Option<Child> {
+    let app_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let candidate = app_dir.join("aurix-worker.exe");
+    if !candidate.is_file() {
+        return None;
+    }
+    Command::new(candidate)
+        .env("AURIX_BRIDGE_TOKEN", token)
+        .env("AURIX_BRIDGE_HOST", "127.0.0.1")
+        .spawn().ok()
+}
+
 fn spawn_bridge(root: &Path, token: &str) -> Option<Child> {
     let entry = root.join("frontend/bridge_server.py");
     for python in ["python", "python3"] {
@@ -271,7 +285,8 @@ async fn resume_actions(state: State<'_, BridgeState>) -> Result<serde_json::Val
 
 fn main() {
     let token = secret();
-    let child = discover_root().and_then(|root| spawn_bridge(&root, &token));
+    let child = spawn_bundled_worker(&token)
+        .or_else(|| discover_root().and_then(|root| spawn_bridge(&root, &token)));
     let client = reqwest::Client::builder().timeout(Duration::from_secs(120))
         .build().expect("Unable to create local HTTP client");
     tauri::Builder::default()

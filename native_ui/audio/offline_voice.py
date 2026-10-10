@@ -10,20 +10,12 @@ import threading
 from pathlib import Path
 
 _VOICE_LOCK = threading.Lock()
-_PROJECT = Path(__file__).resolve().parents[2]
+from security.config_loader import program_root, user_data_root, load_config
+_PROJECT = program_root()
 
 
 def _config() -> dict:
-    try:
-        import sys
-        if sys.version_info >= (3, 11):
-            import tomllib
-        else:
-            import tomli as tomllib
-        with (_PROJECT / "config.toml").open("rb") as stream:
-            return tomllib.load(stream).get("voice", {})
-    except (ImportError, OSError, ValueError):
-        return {}
+    return load_config().get("voice", {})
 
 
 def _model_path(config: dict) -> Path:
@@ -32,7 +24,8 @@ def _model_path(config: dict) -> Path:
         raise RuntimeError("NO_STT_MODEL")
     path = Path(configured)
     if not path.is_absolute():
-        path = _PROJECT / path
+        user_path = user_data_root() / path
+        path = user_path if user_path.is_dir() else _PROJECT / path
     path = path.resolve()
     if not path.is_dir():
         raise RuntimeError("NO_STT_MODEL")

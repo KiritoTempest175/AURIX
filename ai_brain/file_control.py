@@ -404,21 +404,11 @@ class FileSandbox:
             raise SecurityException("Access denied: restricted system location")
 
         roots = [p.resolve(strict=False) for p in cls.ALLOWED_C_DIRS]
-        config_file = Path(__file__).resolve().parent.parent / "config.toml"
-        try:
-            import sys
-            if sys.version_info >= (3, 11):
-                import tomllib
-            else:
-                import tomli as tomllib
-            with config_file.open("rb") as stream:
-                configured = tomllib.load(stream)
-            for entry in configured.get("security", {}).get("allowed_project_paths", []):
-                if not isinstance(entry, str) or not entry.strip():
-                    continue
+        from security.config_loader import load_config
+        configured = load_config()
+        for entry in configured.get("security", {}).get("allowed_project_paths", []):
+            if isinstance(entry, str) and entry.strip():
                 roots.append(Path(entry).expanduser().resolve(strict=False))
-        except (FileNotFoundError, OSError, ValueError):
-            pass
 
         if not any(root == canonical or root in canonical.parents for root in roots):
             raise SecurityException(

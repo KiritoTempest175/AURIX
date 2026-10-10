@@ -19,14 +19,8 @@ _NETWORK_TOOLS = frozenset({
 
 def _configured_offline() -> bool:
     try:
-        import sys
-        if sys.version_info >= (3, 11):
-            import tomllib
-        else:
-            import tomli as tomllib
-        path = Path(__file__).resolve().parent.parent / "config.toml"
-        with path.open("rb") as stream:
-            return bool(tomllib.load(stream).get("general", {}).get("offline_mode", True))
+        from security.config_loader import load_config
+        return load_config().get("general", {}).get("offline_mode", True) is True
     except (OSError, ValueError, ImportError):
         return True
 

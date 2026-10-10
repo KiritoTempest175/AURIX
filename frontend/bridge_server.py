@@ -15,9 +15,11 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+SOURCE_ROOT = Path(__file__).resolve().parent.parent
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+from security.config_loader import program_root, install_user_config
+ROOT = program_root()
 
 LOG = logging.getLogger("aurix.bridge")
 MAX_BODY = 64 * 1024
@@ -240,6 +242,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
 def main():
     logging.basicConfig(level=logging.INFO)
+    if getattr(sys, "frozen", False):
+        install_user_config()
     token = os.environ.get("AURIX_BRIDGE_TOKEN", "")
     if len(token) < 40:
         raise SystemExit("Bridge requires a Tauri-generated session secret")

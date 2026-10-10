@@ -10,7 +10,7 @@ Updated: 2026-10-10. Status is based on code changes, not an executed Windows pe
 | H-02 | Partially fixed | `ai_brain/file_control.py`: canonical allowlisted roots; address race windows and full Rust/Python unification |
 | H-03 | Fixed in source | `ai_brain/second_brain.py`: path-component-safe `relative_to` |
 | H-04 | Partially fixed | Remove current vault files, update `.gitignore`, `docs/PRIVACY_HISTORY.md`; rewrite Git history independently |
-| H-05 | Open | `frontend/src-tauri/src/main.rs`: removed hardcoded E:/ path, but packaged sidecar is not bundled |
+| H-05 | Partial | Native startup prefers a packaged worker and an unsigned Windows sidecar/Tauri workflow exists; clean-VM installation remains unverified |
 | H-06 | Mitigated | `frontend/src-tauri/tauri.conf.json`: references only committed icon.ico; produce full image asset set later |
 | H-07 | Partially mitigated | `ai_engine/training/student_qlora_loop.py` now launches a real gated QLoRA subprocess and reports exit status; model evaluation and metrics remain unverified |
 | H-08 | Partially fixed | `core_engine/src/governor/monitor.rs`: corrected 102 typo and 12/6 GiB constants; load limits from validated config and measure app allocation |
@@ -43,6 +43,6 @@ Updated: 2026-10-10. Status is based on code changes, not an executed Windows pe
 - Full git/software installation/IDE/email/WhatsApp action set with risk tiers.
 - Complete second brain: opt-in encrypted SQLite memory and an initial Memory Explorer are available; vector retrieval, conflict resolution, durable backups and tested key rotation remain outstanding.
 - Evaluated QLoRA adapters with genuine loss/progress reporting and rollback, beyond the gated training subprocess.
-- Signed single installer, updater, system tray, global kill switch and accessibility audit.
+- Verified signed Windows installer, updater, system tray, OS-level kill switch and accessibility audit. A manual unsigned preview script exists.
 
 No remaining item above should be advertised as production-ready.

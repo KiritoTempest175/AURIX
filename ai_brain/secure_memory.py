@@ -22,24 +22,18 @@ _STORE = None
 
 
 def memory_enabled() -> bool:
-    """Explicit opt-in from the single active configuration."""
     try:
-        import sys
-        if sys.version_info >= (3, 11):
-            import tomllib
-        else:
-            import tomli as tomllib
-        root = Path(__file__).resolve().parent.parent
-        with (root / "config.toml").open("rb") as stream:
-            return tomllib.load(stream).get("memory", {}).get("enabled") is True
+        from security.config_loader import load_config
+        return load_config().get("memory", {}).get("enabled") is True
     except (OSError, ValueError, ImportError):
         return False
 
 
 def _user_root() -> Path:
-    if os.name != "nt" or not os.environ.get("LOCALAPPDATA"):
-        raise RuntimeError("Persistent memory requires Windows LocalAppData")
-    return Path(os.environ["LOCALAPPDATA"]) / "AURIX" / "private"
+    if os.name != "nt":
+        raise RuntimeError("Persistent memory requires Windows DPAPI")
+    from security.config_loader import user_data_root
+    return user_data_root() / "private"
 
 
 def _master_key(root: Path) -> bytes:

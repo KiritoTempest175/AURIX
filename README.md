@@ -17,7 +17,7 @@ AURIX is an **experimental Windows desktop AI assistant**. The application UI is
 
 ## Not yet implemented or validated
 
-- A bundled Python sidecar, one-click standalone installer, auto-updater, full first-run onboarding.
+- A verified and signed one-click installer with auto-updater and full onboarding. An experimental unsigned PyInstaller/Tauri build script now exists.
 - Authenticated Windows named-pipe IPC; the loopback HTTP transport is temporary.
 - Always-on wake-word detection and interruptible voice playback. Push-to-talk now uses an optional local Whisper model when installed, otherwise reports unavailability.
 - A Windows restricted-token/Job-Object command sandbox; model-generated `shell_exec` is **disabled** until this exists.
@@ -47,7 +47,7 @@ npm install
 npm run tauri dev
 ```
 
-The Tauri development launcher attempts to start `frontend/bridge_server.py` using `python` or `python3` on PATH. Launching `npm run dev` **only runs the Vite browser preview**, where actions are unavailable. The packaged desktop binary is **not yet self-contained**. If the worker is missing, the UI will show it as unavailable.
+Tauri now prefers an installer-bundled `aurix-worker.exe` beside its executable; source-mode development falls back to `frontend/bridge_server.py` using `python` or `python3` on PATH. Launching `npm run dev` **only runs the Vite browser preview**, where actions are unavailable. The packaged desktop binary is **not yet self-contained**. If the worker is missing, the UI will show it as unavailable.
 
 Optional native engine build from the repo root:
 
@@ -89,3 +89,23 @@ MIT — see [LICENSE](LICENSE).
 ## Known limitations and participation
 
 This repo is an in-progress project. Contributions should not introduce fake model progress, hardcoded user paths, secrets, tracked personal memory or unsupported claims of offline operation. New external or destructive tool capabilities must have an auditable trusted-user authorization mechanism.
+
+## Windows installer preview (unsigned, unverified)
+
+Run on a Windows workstation after installing the project prerequisites:
+
+```powershell
+pwsh ./installer/build_windows.ps1
+```
+
+The manual `Windows Installer Preview` workflow can also be dispatched in GitHub Actions. The script creates a PyInstaller one-file Python worker and temporarily configures Tauri to bundle it. Installer startup, Microsoft code signing, clean-machine functionality and updates still require verification; **do not distribute as a production release**.
+
+Configuration is read through `security/config_loader.py`, preferring a private per-user TOML override under `%LOCALAPPDATA%/AURIX` over the bundled default. An explicitly supplied `AURIX_CONFIG_PATH` also works.
+
+Model weights are never downloaded automatically. To import an independently verified GGUF file:
+
+```powershell
+python scripts/import_model.py C:\\models\\approved.gguf --sha256 YOUR_VERIFIED_64_HEX_DIGEST
+```
+
+The importer checks SHA-256 before copying into the per-user models directory. Update `[llm].model_path` to match the imported file.

@@ -11,7 +11,7 @@ npm run tauri dev
 
 `npm run dev` opens only the browser preview. It does **not** start the worker.
 
-The AI worker currently requires Python and the source checkout on the computer. The installer build has not been integrated with a bundled sidecar. Until that is done, packaged installers are not supported for end users.
+Source-mode development requires Python. The experimental PyInstaller sidecar bundle script lives in `installer/build_windows.ps1`; its unsigned outputs are not yet suitable for general end users.
 
 ## Backend boundary
 

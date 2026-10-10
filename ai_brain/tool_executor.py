@@ -48,37 +48,8 @@ PENDING_ACTION_TTL_SECONDS = 60.0
 
 
 def _load_config() -> Dict[str, Any]:
-    """Load AURIX config.toml."""
-
-    config_path = (
-        Path(__file__).resolve().parent.parent
-        / "config.toml"
-    )
-
-    if not config_path.exists():
-        return {}
-
-    try:
-        import sys
-
-        if sys.version_info >= (3, 11):
-            import tomllib
-        else:
-            import tomli as tomllib
-
-        with open(
-            config_path,
-            "rb",
-        ) as f:
-            return tomllib.load(f)
-
-    except Exception as exc:
-        logger.warning(
-            "Unable to load config.toml: %s",
-            exc,
-        )
-
-        return {}
+    from security.config_loader import load_config
+    return load_config()
 
 
 class _ProcessChecker:
