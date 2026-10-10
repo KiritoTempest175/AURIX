@@ -14,7 +14,7 @@ Updated: 2026-10-10. Status is based on code changes, not an executed Windows pe
 | H-06 | Mitigated | `frontend/src-tauri/tauri.conf.json`: references only committed icon.ico; produce full image asset set later |
 | H-07 | Partially mitigated | `ai_engine/training/student_qlora_loop.py` now launches a real gated QLoRA subprocess and reports exit status; model evaluation and metrics remain unverified |
 | H-08 | Partially fixed | `core_engine/src/governor/monitor.rs`: corrected 102 typo and 12/6 GiB constants; load limits from validated config and measure app allocation |
-| H-09 | Partially fixed | `frontend/src/App.jsx`: approval preview + Rust native confirmation; persistent audit and expiry visualization remain |
+| H-09 | Partially fixed | Native confirmation and 600-char complete outbound message preview; persistent audit, large scrollable previews and expiry display remain |
 | H-10 | Fixed in source | Tauri CSP enabled in `frontend/src-tauri/tauri.conf.json`; review final policies with packaged app |
 | M-01 | Partially fixed | Thread/request bounds in bridge; inference still serialized and can block queued requests |
 | M-02 | Fixed at bridge | Safe structured error codes in `frontend/bridge_server.py`; other legacy tools still leak errors |

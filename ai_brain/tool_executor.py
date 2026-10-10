@@ -414,6 +414,11 @@ class ToolExecutor:
 
         if tool_name == "send_email":
 
+            # The native confirmation must display the entire outgoing body.
+            # Longer messages need a future scrollable native review window.
+            if len(str(args.get("body", ""))) > 600:
+                return "Email is too long for the current native approval preview (600-character limit)."
+
             recipient = clean_string(
                 "to"
             )
@@ -553,6 +558,13 @@ class ToolExecutor:
                         "I need a YouTube query or URL "
                         f"before I can {action}."
                     )
+
+        # --------------------------------------------------------
+        # WHATSAPP MESSAGE: bound content so native approval can display all.
+        # --------------------------------------------------------
+        if tool_name == "send_whatsapp_message":
+            if len(str(args.get("message", ""))) > 600:
+                return "Message too long for native approval preview (600-character limit)."
 
         # --------------------------------------------------------
         # WHATSAPP CALL
@@ -1015,11 +1027,13 @@ class ToolExecutor:
 
         mapping = {
 
+            # Until program launch is restricted to trusted executables,
+            # launching an app requires the user's native confirmation.
             "open_app":
-                ActionCategory.APP_CONTROL,
+                ActionCategory.SYSTEM_SETTING,
 
             "close_app":
-                ActionCategory.APP_CONTROL,
+                ActionCategory.SYSTEM_SETTING,
 
             "play_media":
                 ActionCategory.APP_CONTROL,
@@ -1195,14 +1209,7 @@ class ToolExecutor:
                 )
             )
 
-            preview = (
-                body[:180]
-                + (
-                    "..."
-                    if len(body) > 180
-                    else ""
-                )
-            )
+            preview = body
 
             return (
                 f"Send email to {args.get('to')} "
@@ -1222,14 +1229,7 @@ class ToolExecutor:
                 )
             )
 
-            preview = (
-                message[:180]
-                + (
-                    "..."
-                    if len(message) > 180
-                    else ""
-                )
-            )
+            preview = message
 
             return (
                 "Send WhatsApp message to "
