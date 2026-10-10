@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { summarizeMetric } from "./utils/telemetry.mjs";
+import ModelsPanel from "./components/ModelsPanel.jsx";
 
 // The session credential never enters JavaScript; only native commands can
 // access the authenticated Python worker.
@@ -128,7 +129,7 @@ export default function App() {
   const telemetry = useTelemetry();
   const [status, setStatus] = useState("standby");
   const [messages, setMessages] = useState([
-    { from: "aurix", text: "LUNA ready. Text works with a locally installed GGUF model. Offline speech needs a local Whisper model." },
+    { from: "aurix", text: "LUNA ready. Choose a local model under Models to begin. Ollama and GGUF are supported." },
   ]);
   const [draft, setDraft] = useState("");
   const logRef = useRef(null);
@@ -422,7 +423,7 @@ export default function App() {
         </div>
 
         <nav className="nav-list">
-          {["Command", "Telemetry", "Memory", "System", "Activity"].map((item) => (
+          {["Command", "Models", "Telemetry", "Memory", "System", "Activity"].map((item) => (
             <button key={item} className={`nav-item ${activeView === item ? "is-active" : ""}`} onClick={() => setActiveView(item)} aria-current={activeView === item ? "page" : undefined}>
               <span className="nav-dot" />
               {item}
@@ -503,6 +504,9 @@ export default function App() {
           </>
         ) : (
           <section className="workspace-panel" aria-label={activeView}>
+            {activeView === "Models" && (
+              <ModelsPanel workerOnline={workerOnline} offline={settings?.offline ?? true} />
+            )}
             {activeView === "Telemetry" && (
               <>
                 <h2>Telemetry history</h2>
@@ -563,7 +567,7 @@ export default function App() {
             {activeView === "System" && (
               <>
                 <h2>System controls</h2>
-                <p>Worker: {workerOnline ? "Connected" : "Disconnected"}. Models need local files.</p>
+                <p>Worker: {workerOnline ? "Connected" : "Disconnected"}. Ollama model installation and selection are managed in the Models panel.</p>
                 <div className="setting-line">
                   <div><strong>Offline mode</strong><p>Blocks the agent's network-capable tools while enabled.</p></div>
                   <button onClick={updateOffline} disabled={!workerOnline || !settings}>

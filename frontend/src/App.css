@@ -830,3 +830,22 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 }
 .speech-controls button:hover:not(:disabled) { border-color: var(--accent); }
 .speech-status { color: var(--text-dim); font-size: 11px; padding: 5px 0 8px; }
+
+/* Hardware-neutral model setup: responsive cards, clear status and progress. */
+.models-panel { display: flex; flex-direction: column; gap: 12px; max-width: 100%; }
+.models-panel h2, .models-panel h3 { margin: 0; }
+.models-banner { display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px; }
+.models-banner > span { padding: 8px 12px; border: 1px solid var(--border, #40505c); border-radius: 9px; }
+.model-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.models-panel button { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border, #40505c); background: var(--panel, #172330); color: inherit; cursor: pointer; }
+.models-panel button:disabled { opacity: .45; cursor: not-allowed; }
+.models-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+.model-card { border: 1px solid var(--border, #40505c); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+.model-card > span, .model-footnote { font-size: 12px; opacity: .8; overflow-wrap: anywhere; }
+.model-card p { font-size: 13px; margin: 0 0 auto; }
+.model-active { font-weight: 700; color: var(--accent, #60d9e9); }
+.model-custom { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.model-custom input { min-width: 170px; flex: 1; background: var(--panel, #152330); border: 1px solid var(--border, #40505c); border-radius: 8px; color: inherit; padding: 10px; }
+.model-notice, .model-error { color: var(--warn, #eebc72); }
+.model-progress progress { display: block; width: 100%; margin-top: 8px; }
+@media (prefers-reduced-motion: reduce) { .models-panel * { transition: none !important; } }

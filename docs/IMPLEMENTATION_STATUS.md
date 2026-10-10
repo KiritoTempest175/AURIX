@@ -12,7 +12,7 @@ Updated: 2026-10-10. Status is based on code changes, not an executed Windows pe
 | H-04 | Partially fixed | Remove current vault files, update `.gitignore`, `docs/PRIVACY_HISTORY.md`; rewrite Git history independently |
 | H-05 | Partial | Native startup prefers a packaged worker and an unsigned Windows sidecar/Tauri workflow exists; clean-VM installation remains unverified |
 | H-06 | Mitigated | `frontend/src-tauri/tauri.conf.json`: references only committed icon.ico; produce full image asset set later |
-| H-07 | Partially mitigated | `ai_engine/training/student_qlora_loop.py` now launches a real gated QLoRA subprocess and reports exit status; model evaluation and metrics remain unverified |
+| H-07 | Not applicable to active inference | Normal AURIX uses selected Ollama/GGUF model inference only. Legacy QLoRA research modules are not part of model selection or conversation; dependencies moved to optional training extras. |
 | H-08 | Adapted to new requirement | Removed absolute RAM/VRAM ceilings from Rust and Python. The governor now yields background work on relative low-memory/thermal signals, and GGUF permits any supported GPU backend with CPU fallback. Native hardware benchmarks remain pending. |
 | H-09 | Partially fixed | Native confirmation and 600-char complete outbound message preview; persistent audit, large scrollable previews and expiry display remain |
 | H-10 | Fixed in source | Tauri CSP enabled in `frontend/src-tauri/tauri.conf.json`; review final policies with packaged app |
@@ -36,13 +36,13 @@ Updated: 2026-10-10. Status is based on code changes, not an executed Windows pe
 
 ## Platform commitments still outstanding
 
-- A bundled, validated GGUF/llama.cpp runtime; optional local-only `ai_engine/inference/local_gguf.py` now runs the default model path without cloud/Ollama.
+- Real end-to-end validation of the in-app Ollama installation/model downloads and GGUF fallback on clean Windows; model weights remain user-installed.
 - Lazy wake-word/STT/TTS pipeline and interruptible speech.
 - Measured low idle resource use and adaptive optimization on varied hardware; fixed RAM/VRAM caps were intentionally removed.
 - Rust telemetry history and CSV exports.
 - Full git/software installation/IDE/email/WhatsApp action set with risk tiers.
 - Complete second brain: opt-in encrypted SQLite memory and an initial Memory Explorer are available; vector retrieval, conflict resolution, durable backups and tested key rotation remain outstanding.
-- Evaluated QLoRA adapters with genuine loss/progress reporting and rollback, beyond the gated training subprocess.
+- No QLoRA training is needed or scheduled in the active assistant. Optional legacy research code remains in the repository, outside the production inference workflow.
 - Verified signed Windows installer, updater, system tray, OS-level kill switch and accessibility audit. A manual unsigned preview script exists.
 
 No remaining item above should be advertised as production-ready.
@@ -61,3 +61,8 @@ The Windows-only Piper adapter in native_ui/audio/offline_tts.py synthesizes bou
 
 ### Memory privacy UI
 Memory capture may now be toggled in System and Memory views with an explicit consent prompt. The selected preference is saved privately to privacy-settings.json, with DPAPI preflight before enabling. This does not implement full memory backup, key rotation, vector search or guaranteed secure erasure.
+
+
+### Local-model configuration (inference only)
+
+The model setup is controlled by the desktop Models panel, which calls trusted native Rust commands for `winget` installation, local Ollama model downloads (with progress events), deletion and activation. The Python worker uses the fixed loopback Ollama chat API or the configured GGUF backend. Users choose Qwen3, Gemma3 or any syntactically valid installed Ollama model tag; model weights are never downloaded automatically. Runtime verification on real Windows hardware remains required.

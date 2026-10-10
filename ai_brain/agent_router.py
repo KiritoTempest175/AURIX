@@ -6,7 +6,7 @@ import logging
 from typing import Optional, Tuple
 
 from ai_brain.tool_executor import ToolExecutor
-from ai_engine.inference.local_gguf import LocalGGUFRunner, get_default_local_runner
+from ai_engine.inference.ollama_runtime import get_model_runner
 
 logger = logging.getLogger(
     "aurix.ai_brain.agent_router"
@@ -45,7 +45,7 @@ class AgentRouter:
     def __init__(
         self,
         executor: Optional[ToolExecutor] = None,
-        model_runner: Optional[LocalGGUFRunner] = None,
+        model_runner: Optional[object] = None,
     ) -> None:
 
         self.executor = (
@@ -77,16 +77,9 @@ class AgentRouter:
     # ============================================================
 
     @property
-    def runner(self) -> LocalGGUFRunner:
-        """Return the shared AURIX reasoning model."""
-
-        if self._runner is None:
-
-            self._runner = (
-                get_default_local_runner()
-            )
-
-        return self._runner
+    def runner(self) -> object:
+        """Select inference backend dynamically; never invoke training."""
+        return self._runner if self._runner is not None else get_model_runner()
 
     # ============================================================
     # MAIN ROUTING

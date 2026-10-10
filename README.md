@@ -6,14 +6,14 @@ AURIX is an **experimental Windows desktop AI assistant**. The application UI is
 
 ## Implemented in the current repository
 
-- Local desktop chat routed to a Python agent when a supported model and runtime are available.
+- Inference-only local desktop chat routed to user-selected Ollama or direct GGUF models. Ollama manages local model storage and supported GPU/CPU acceleration.
 - Rust telemetry for CPU/RAM and, when supported, GPU utilization, temperature and VRAM. Raw data persists in an app-local SQLite database for 24 hours, one-minute aggregates for 30 days and hourly aggregates without automatic expiry. A telemetry history chart shows 1h/24h/7d and can export CSV to app data. No per-process GPU ownership is claimed.
 - Desktop application and file tool implementations with action-level permission requests.
 - Single-use, fingerprint-bound pending action tokens, with a Windows native confirmation dialog for requests made through the Tauri UI.
 - Session-secret-authenticated **localhost-only HTTP** between Tauri and the Python worker. Browser-origin requests and arbitrary hosts are rejected; JavaScript does not receive the token.
 - Encryption/checkpoint code, secret scrubbing, SQLite-based telemetry tools, and automated Python/Rust tests.
 - Opt-in AES-GCM encrypted SQLite memory and Windows DPAPI key storage, with a basic Memory Explorer panel.
-- The guarded StudentTrainingController now starts an actual QLoRA subprocess only when the workstation is idle and plugged in, CUDA and training dependencies are available, and a local dataset exists. It reports real process status, not simulated progress. Its training results have not been independently evaluated.
+- **No training is performed or required in the active assistant.** Older QLoRA research modules remain in the source tree for compatibility; they are not invoked by normal AURIX model selection or chat, and training dependencies are optional.
 
 ## Not yet implemented or validated
 
@@ -21,7 +21,7 @@ AURIX is an **experimental Windows desktop AI assistant**. The application UI is
 - Authenticated Windows named-pipe IPC; the loopback HTTP transport is temporary.
 - Always-on wake-word detection and interruptible voice playback. Push-to-talk now uses an optional local Whisper model when installed, otherwise reports unavailability.
 - A Windows restricted-token/Job-Object command sandbox; model-generated `shell_exec` is **disabled** until this exists.
-- The active agent router uses lazy, local GGUF inference through optional `llama-cpp-python`. Model weights and the native library are not bundled. Legacy Transformers/Ollama code remains in the repository but is not used by the default router.
+- The selected model must first be installed. Ollama is optional, and model downloads need explicit user approval. The direct GGUF backend remains an advanced alternative.
 - The system no longer imposes fixed RAM/VRAM allocation ceilings or GPU-model requirements. The governor reacts to low free-memory percentages and thermal warnings; GGUF uses available acceleration with a CPU fallback. Real-world idle, training and performance benchmarks remain unverified.
 - Complete role-based tool SDK, rollback/undo, persistent native approval audit, memory explorer, signed installer, and independent security assessment.
 - Online communications and software-installation workflows require explicit review; no guarantee is made that every action is fully offline.
@@ -30,7 +30,7 @@ See [implementation status](docs/IMPLEMENTATION_STATUS.md) and [security model](
 
 ## Requirements
 
-Windows 10/11, Python 3.10+, Node.js 22+, a compatible Rust toolchain and the Tauri Windows prerequisites. Model inference, speech and GPU training have their own optional native/dependency requirements. CPU-only inference requires a compatible local GGUF model and `llama-cpp-python`. Missing weights or dependencies produce a clear error, not a fake LLM response.
+Windows 10/11, Python 3.10+, Node.js 24+, compatible Rust/Tauri Windows prerequisites. Ollama is a free optional local model server. Use the in-app Models panel to install Ollama through the verified winget package and download/select a supported model. The alternative direct GGUF backend requires `llama-cpp-python` and a model file. Training is not required; CPU-only local inference is supported by compatible runtime/model combinations.
 
 ## Development setup
 
@@ -40,8 +40,8 @@ cd AURIX
 py -3.10 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
-# Install llama-cpp-python with a compatible CPU/CUDA wheel from a trusted distributor.
-# Place a verified local GGUF model at config.toml [llm].model_path.
+# Model setup is completed inside AURIX: Models → Install Ollama → Download model.
+# Advanced users may install llama-cpp-python and import local GGUF models.
 cd frontend
 npm install
 npm run tauri dev
@@ -61,7 +61,7 @@ Do **not** enable public binding for the Python bridge. Its token is generated a
 
 ## Configuration
 
-`config.toml` is the active file for the tool executor and lazy GGUF model runtime; it does not auto-download weights. Configure `security.allowed_project_paths` for workspace access. Empty trusted roots mean writes require explicit authorization and other Python file reads remain restricted to standard user folders. Legacy modules still contain other configuration defaults; consolidation is not finished.
+`config.toml` is the active default for the tool executor and model runtime. `llm.backend="ollama"` selects local Ollama inference; a user-owned `model_selection.json` stores backend and model switching without changing tracked files. No model downloads occur automatically. Configure `security.allowed_project_paths` for workspace access. Empty trusted roots mean writes require explicit authorization and other Python file reads remain restricted to standard user folders. Legacy modules still contain other configuration defaults; consolidation is not finished.
 
 The current `[general].offline_mode` key is informational until every network-capable tool has been migrated to a central network policy. Do not treat this flag as a verified network isolation switch.
 

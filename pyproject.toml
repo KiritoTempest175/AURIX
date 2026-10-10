@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aurix"
 version = "0.1.0"
-description = "Autonomous Native AI Desktop Agent & Continuous Learning System"
+description = "Autonomous local-first desktop AI assistant"
 requires-python = ">=3.10"
 
 authors = [
@@ -19,10 +19,6 @@ dependencies = [
     "tomli>=2.0; python_version < '3.11'",
     "pywinauto>=0.6.9; platform_system == 'Windows'",
     "pywin32>=306; platform_system == 'Windows'",
-    "torch>=2.2.0",
-    "bitsandbytes",
-    "transformers>=4.38.0",
-    "datasets>=2.18.0",
 
     "chromadb>=0.4.24",
     "nomic>=3.0.0",
@@ -57,12 +53,27 @@ dev = [
     "pytest-asyncio>=0.23.5",
     "black",
     "ruff",
-    "maturin>=1.4.0"
+    "maturin>=1.4.0",
+    # Legacy engine tests only; not included in the inference-only installer.
+    "torch>=2.2.0",
+    "bitsandbytes",
+    "transformers>=4.38.0",
+    "datasets>=2.18.0"
 ]
 
-gpu = [
-    "unsloth"
+gguf = ["llama-cpp-python>=0.3.0"]
+
+# Legacy research dependencies. AURIX's normal desktop workflow does not train.
+training = [
+    "torch>=2.2.0",
+    "bitsandbytes",
+    "transformers>=4.38.0",
+    "datasets>=2.18.0",
+    "unsloth",
+    "trl"
 ]
+
+gpu = ["llama-cpp-python>=0.3.0"]
 
 
 [tool.setuptools.packages.find]

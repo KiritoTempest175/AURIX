@@ -129,17 +129,35 @@ class BridgeHandler(BaseHTTPRequestHandler):
             return self._json({"error": "UNAUTHORIZED"}, 401)
         if self.path == "/health":
             try:
-                from ai_engine.inference.local_gguf import get_default_local_runner
-                runner = get_default_local_runner()
+                from ai_engine.inference.ollama_runtime import get_model_runner
+                runner = get_model_runner()
                 return self._json({
                     "status": "ok", "model_ready": runner.is_available,
-                    "model_loaded": runner._model is not None,
+                    "model_loaded": getattr(runner, "_model", None) is not None,
                     "backend": runner.backend,
                 })
             except Exception:
                 return self._json({"status": "ok", "model_ready": False, "model_loaded": False})
         if self.path == "/telemetry":
             return self._json(telemetry())
+        if self.path == "/models":
+            from ai_engine.inference.ollama_runtime import (
+                RECOMMENDED_MODELS, selection, installed_models,
+            )
+            chosen = selection()
+            try:
+                installed = installed_models()
+                connected = True
+            except (OSError, ValueError, RuntimeError):
+                installed = []
+                connected = False
+            return self._json({
+                "backend": chosen["backend"],
+                "selected": chosen["model"],
+                "ollama_connected": connected,
+                "installed": installed,
+                "recommendations": RECOMMENDED_MODELS,
+            })
         if self.path == "/settings":
             from security.action_control import offline_mode, action_is_stopped
             from ai_brain.secure_memory import memory_enabled
@@ -186,6 +204,23 @@ class BridgeHandler(BaseHTTPRequestHandler):
             from security.action_control import resume_actions
             resume_actions()
             return self._json({"stopped": False})
+        if self.path == "/models/activate":
+            from ai_engine.inference.ollama_runtime import (
+                set_selection, selection,
+            )
+            backend, model = data.get("backend"), data.get("model")
+            try:
+                if not isinstance(backend, str) or not isinstance(model, str):
+                    return self._json({"error": "INVALID_MODEL"}, 400)
+                result = set_selection(backend, model)
+                return self._json(result)
+            except ValueError as exc:
+                code = str(exc)
+                if code not in {"INVALID_BACKEND", "INVALID_MODEL", "MODEL_NOT_INSTALLED"}:
+                    code = "INVALID_MODEL"
+                return self._json({"error": code}, 400)
+            except (OSError, TimeoutError):
+                return self._json({"error": "OLLAMA_UNAVAILABLE"}, 503)
         if self.path == "/settings":
             if set(data) == {"offline"} and type(data.get("offline")) is bool:
                 from security.action_control import set_offline_mode
