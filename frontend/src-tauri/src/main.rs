@@ -347,7 +347,7 @@ async fn local_post(
     route: &str,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let res = state.client.post(format!("{BRIDGE_URL}{route}"))
+    let res = state.client.post(bridge_url(state, route))
         .bearer_auth(&state.token).json(&body).send().await
         .map_err(|_| "Private worker unavailable".to_string())?;
     if !res.status().is_success() {
