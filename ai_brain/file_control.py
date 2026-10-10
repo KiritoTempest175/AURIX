@@ -247,16 +247,27 @@ class FileSandbox:
             "appdata",
         }
 
+        deadline = time.monotonic() + 2.0
+        remaining_entries = 10_000
         for base_dir in cls.ALLOWED_C_DIRS:
 
+            if time.monotonic() >= deadline or remaining_entries <= 0:
+                break
             if not base_dir.exists():
                 continue
 
             try:
 
                 for root, dirs, files in os.walk(
-                    base_dir
+                    base_dir, followlinks=False
                 ):
+                    if remaining_entries <= 0 or time.monotonic() >= deadline:
+                        break
+                    remaining_entries -= 1
+                    # Bound recursion even if the user has millions of files.
+                    depth = len(Path(root).relative_to(base_dir).parts)
+                    if depth >= 6:
+                        dirs.clear()
 
                     dirs[:] = [
                         d
@@ -278,8 +289,10 @@ class FileSandbox:
                         )
 
                     # File matches
-                    for file_name in files:
-
+                    for file_name in files[:min(len(files), remaining_entries)]:
+                        remaining_entries -= 1
+                        if remaining_entries <= 0 or time.monotonic() >= deadline:
+                            break
                         name_lower = file_name.lower()
 
                         candidate = (
@@ -480,9 +493,14 @@ class FileController:
             if not target.is_file():
                 return f"Path is a directory, not a file: {target}"
 
-            content = target.read_text(encoding="utf-8", errors="replace")
+            # Do not allocate entire multi-gigabyte source files to answer a
+            # request for a short preview. Report truncation without a fake
+            # total-length claim.
+            max_chars = max(1, min(100_000, int(max_chars)))
+            with target.open("r", encoding="utf-8", errors="replace") as stream:
+                content = stream.read(max_chars + 1)
             if len(content) > max_chars:
-                return content[:max_chars] + f"\n\n[Truncated: displaying {max_chars} of {len(content)} total characters]"
+                return content[:max_chars] + f"\n\n[Truncated after {max_chars} characters]"
             return content
         except Exception as e:
             return f"Read error: {e}"
