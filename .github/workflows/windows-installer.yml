@@ -14,8 +14,10 @@ jobs:
           python-version: '3.11'
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
       - uses: dtolnay/rust-toolchain@stable
+      - name: Upgrade npm to supported resolver
+        run: npm install --global npm@11.6.0
       - name: Build bundled worker and Tauri installer
         shell: pwsh
         run: ./installer/build_windows.ps1

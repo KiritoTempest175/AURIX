@@ -38,7 +38,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: '24'
+      - name: Select supported npm toolchain
+        working-directory: frontend
+        run: |
+          npm install --global npm@11.6.0
+          npm --version
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm install
