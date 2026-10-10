@@ -688,7 +688,7 @@ class ToolExecutor:
         args = args or {}
 
         # Enforce the emergency stop and offline policy BEFORE any tool routing.
-        from security.action_control import action_is_stopped, network_allowed
+        from security.action_control import action_is_stopped, network_allowed, action_generation
         if action_is_stopped():
             return "ACTION_STOPPED: Emergency block is engaged."
         if not network_allowed(tool_name):
@@ -820,9 +820,7 @@ class ToolExecutor:
                     "created_at":
                         now,
 
-                    "stop_generation": __import__(
-                        "security.action_control", fromlist=["action_generation"]
-                    ).action_generation(),
+                    "stop_generation": action_generation(),
 
                     "expires_at":
                         (
