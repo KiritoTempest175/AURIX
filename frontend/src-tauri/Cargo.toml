@@ -20,7 +20,8 @@ nvml-wrapper = "0.9.0"
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = ["Win32_UI_WindowsAndMessaging"] }
+# MessageBoxW is additionally gated on Win32_Foundation in windows-sys 0.52.
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.release]
 panic = "abort"

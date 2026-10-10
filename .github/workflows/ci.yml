@@ -23,6 +23,8 @@ jobs:
         with:
           components: clippy, rustfmt
       - run: cargo check --workspace
+      # Packaging uses the release profile; catch Windows-only imports before installer builds.
+      - run: cargo check --release --package aurix-desktop
       - run: cargo test --workspace
 
   python:
