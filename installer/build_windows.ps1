@@ -62,6 +62,9 @@ try {
                 if ($null -eq $settings.offline -or $null -eq $models.recommendations) {
                     throw 'Worker API is incomplete'
                 }
+                # Wake phrase tests dispatch initialization without needing a model download.
+                $wake = Invoke-RestMethod -Uri 'http://127.0.0.1:9721/dispatch' -Method Post -Headers $headers -ContentType 'application/json' -Body '{"text":"hey luna"}' -TimeoutSec 15
+                if ($wake.reply -notlike '*online*') { throw 'Packaged dispatcher failed its wake-phrase smoke test' }
                 $ready = $true
                 break
             }
