@@ -43,6 +43,7 @@ def valid_model(name: str) -> bool:
         isinstance(name, str)
         and bool(MODEL_PATTERN.fullmatch(name))
         and ".." not in name
+        and "://" not in name
         and not name.lower().endswith("-cloud")
     )
 

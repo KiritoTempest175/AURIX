@@ -249,6 +249,7 @@ async fn local_post(
 // installed service. All downloads and installations require a user gesture.
 fn valid_ollama_model(name: &str) -> bool {
     !name.is_empty() && name.len() <= 120 && !name.contains("..")
+        && !name.contains("://")
         && !name.to_ascii_lowercase().ends_with("-cloud")
         && name.bytes().enumerate().all(|(i, byte)| {
             byte.is_ascii_alphanumeric() || (i > 0 &&
