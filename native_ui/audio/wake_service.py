@@ -25,7 +25,8 @@ _FAILURE = ""
 _ARMED_UNTIL = 0.0
 _LOADED = False
 _ENABLED = False
-_WAKE = re.compile(r"\b(?:hey|hello|okay|ok)\s+luna\b|\bluna\b|\bhey\s+aurix\b", re.I)
+# Do not trigger on the assistant's own startup sentence mentioning LUNA.
+_WAKE = re.compile(r"\b(?:hey|hello|okay|ok)\s+luna\b|\bhey\s+aurix\b|^\s*luna\b", re.I)
 
 
 def _path() -> Path:
