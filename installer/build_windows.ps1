@@ -62,7 +62,10 @@ try {
             if ($health.status -eq 'ok') {
                 $settings = Invoke-RestMethod -Uri 'http://127.0.0.1:9721/settings' -Headers $headers -TimeoutSec 4
                 $models = Invoke-RestMethod -Uri 'http://127.0.0.1:9721/models' -Headers $headers -TimeoutSec 8
-                if ($null -eq $settings.offline -or $null -eq $models.recommendations) {
+                $account = Invoke-RestMethod -Uri 'http://127.0.0.1:9721/email/configure' -Headers $headers -TimeoutSec 8
+                $wakeState = Invoke-RestMethod -Uri 'http://127.0.0.1:9721/voice/wake' -Headers $headers -TimeoutSec 8
+                if ($null -eq $settings.offline -or $null -eq $models.recommendations -or
+                    $null -eq $account.configured -or $null -eq $wakeState.enabled) {
                     throw 'Worker API is incomplete'
                 }
                 # Wake phrase tests dispatch initialization without needing a model download.
