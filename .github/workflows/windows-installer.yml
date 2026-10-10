@@ -35,12 +35,16 @@ jobs:
       - name: Build bundled worker and Tauri installer
         shell: pwsh
         run: ./installer/build_windows.ps1
+      - name: Verify actual installed application without developer runtimes
+        shell: pwsh
+        run: ./installer/smoke_installed.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: aurix-windows-unsigned-preview
           path: |
             target/release/bundle/nsis/*.exe
             target/release/bundle/msi/*.msi
+            installer-smoke.json
           if-no-files-found: error
 
       # A preview release is published only for explicitly requested runs.
@@ -74,7 +78,7 @@ jobs:
 
           **First run:** AURIX launches a bundled local Python worker. In Models, choose Enable model downloads to install Ollama and download a local model. All downloads require approval.
 
-          **Known limitations:** Windows installer and local model flows are not independently validated on end-user PCs; code signing and updates are not implemented. Native named-pipe IPC, full voice interaction, and sandboxed shell execution remain unfinished.
+          **Known limitations:** CI checks installation in an isolated PATH, not on a clean Windows VM. Local model flows remain unverified on end-user PCs; code signing and updates are not implemented. Native named-pipe IPC, full voice interaction, and sandboxed shell execution remain unfinished.
 
           Source is committed directly to main. SHA256SUMS.txt lists hashes for the installer downloads.
           '@ | Set-Content -Path 'preview-release-notes.md' -Encoding utf8

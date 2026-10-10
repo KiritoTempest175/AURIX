@@ -140,3 +140,15 @@ The desktop System panel can enable or disable opt-in persistent memory without 
 - Windows builds include optional desktop automation packages such as PyAutoGUI; no Python/Node/Rust developer tooling is required for end users of the installer.
 
 **Verification boundary:** CI unit tests and installer smoke tests are not equivalent to live device trials. Always-on speech, Windows language availability, third-party WhatsApp automation, SMTP delivery, privileged IPC hardening, secure OS process sandboxing, signed updates, clean machine trials, and accessibility audits remain unverified or incomplete. This is an unsigned testing release, not a certified production build.
+
+
+### Windows release evidence
+
+The GitHub Windows installer job now smoke-tests both the frozen Python worker
+and an actual NSIS installation launched with Python, Node.js and Rust absent
+from `PATH`. This is an isolated hosted-runner test, **not a clean-machine VM
+test, device microphone verification, or a security certification**.
+
+The default Python requirements are intentionally small. Optional research
+libraries live in `.[dev]` and are not bundled into ordinary desktop builds.
+The chosen Ollama local model, when used, is downloaded explicitly from the app.
