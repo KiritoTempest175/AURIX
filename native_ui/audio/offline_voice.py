@@ -95,7 +95,7 @@ def speech_backend() -> str:
 
 def transcribe_microphone() -> str:
     """Record a fixed bounded segment; return actual recognized words."""
-    if not _VOICE_LOCK.acquire(blocking=False):
+    if not _VOICE_LOCK.acquire(timeout=11):
         raise RuntimeError("VOICE_BUSY")
     try:
         cfg = _config()

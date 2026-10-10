@@ -70,8 +70,8 @@ def _listen() -> None:
             if _STOP.is_set():
                 break
             try:
-                from native_ui.audio.offline_tts import is_active
-                if is_active():
+                from native_ui.audio.offline_tts import spoken_recently
+                if spoken_recently():
                     continue
             except ImportError:
                 pass
@@ -121,10 +121,15 @@ def configure(enabled: bool) -> dict:
         _ensure_loaded()
         if enabled:
             _start()
+            old_listener = None
         else:
             _STOP.set()
             _ARMED_UNTIL = 0
-        return status()
+            old_listener = _THREAD
+    # Avoid a microphone race and do not join while holding _LOCK.
+    if old_listener and old_listener.is_alive():
+        old_listener.join(timeout=11.0)
+    return status()
 
 
 def status() -> dict:

@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import threading
 from pathlib import Path
 from typing import Optional
@@ -21,6 +22,7 @@ _ACTIVE = False
 _CANCEL = threading.Event()
 _THREAD: Optional[threading.Thread] = None
 _NATIVE_PROC: Optional[subprocess.Popen] = None
+_LAST_SPOKE_AT = 0.0
 
 
 def _resources() -> tuple[str, Path]:
@@ -97,7 +99,7 @@ def speak_async(text: str) -> bool:
 
 
 def _speak_worker(executable: str, model: Path, text: str) -> None:
-    global _ACTIVE
+    global _ACTIVE, _LAST_SPOKE_AT
     target = None
     try:
         import winsound
@@ -123,6 +125,7 @@ def _speak_worker(executable: str, model: Path, text: str) -> None:
             except OSError:
                 LOG.warning("Temporary voice file could not be removed")
         with _LOCK:
+            _LAST_SPOKE_AT = time.monotonic()
             _ACTIVE = False
 
 
@@ -131,9 +134,14 @@ def is_active() -> bool:
         return bool(_ACTIVE)
 
 
+def spoken_recently() -> bool:
+    with _LOCK:
+        return bool(_ACTIVE or (time.monotonic() - _LAST_SPOKE_AT) < 1.5)
+
+
 def _speak_windows_voice(text: str) -> None:
     """Speak using Windows-installed local voices; no network or shell input."""
-    global _ACTIVE, _NATIVE_PROC
+    global _ACTIVE, _NATIVE_PROC, _LAST_SPOKE_AT
     import base64
     script = r"""
 $ErrorActionPreference = 'Stop'
@@ -174,4 +182,5 @@ finally { $voice.Dispose() }
     finally:
         with _LOCK:
             _NATIVE_PROC = None
+            _LAST_SPOKE_AT = time.monotonic()
             _ACTIVE = False
