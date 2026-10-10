@@ -1,5 +1,23 @@
 from unittest.mock import patch
 
+import pytest
+from security.action_control import offline_mode, set_offline_mode
+
+
+@pytest.fixture(autouse=True)
+def enable_network_only_for_communication_policy_tests():
+    """Approval tests exercise online operations under an explicit session opt-in.
+
+    Offline Mode remains the production default; never change it globally.
+    """
+    previous = offline_mode()
+    set_offline_mode(False)
+    try:
+        yield
+    finally:
+        set_offline_mode(previous)
+
+
 from ai_brain.email_control import EmailController
 from ai_brain.message_control import (
     WhatsAppController,
