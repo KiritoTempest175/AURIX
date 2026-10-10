@@ -653,7 +653,8 @@ export default function App() {
         ) : (
           <section className="workspace-panel" aria-label={activeView}>
             {activeView === "Models" && (
-              <ModelsPanel workerOnline={workerOnline} offline={settings?.offline ?? true} />
+              <ModelsPanel workerOnline={workerOnline} offline={settings?.offline ?? true}
+                onOfflineChange={offline => setSettings(previous => ({ ...previous, offline }))} />
             )}
             {activeView === "Email" && (
               <EmailPanel workerOnline={workerOnline} offline={settings?.offline ?? true} />
