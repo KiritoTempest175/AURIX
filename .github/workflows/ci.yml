@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# Superseded main commits should not saturate Windows runners.
+concurrency:
+  group: aurix-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   rust:
     runs-on: windows-latest
