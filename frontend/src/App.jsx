@@ -132,7 +132,7 @@ export default function App() {
   const telemetry = useTelemetry();
   const [status, setStatus] = useState("standby");
   const [messages, setMessages] = useState([
-    { from: "aurix", text: "LUNA ready. Choose a local model under Models to begin. Ollama and GGUF are supported." },
+    { from: "aurix", text: "LUNA is starting. Select an Ollama model from Models if needed." },
   ]);
   const [draft, setDraft] = useState("");
   const logRef = useRef(null);
@@ -155,6 +155,23 @@ export default function App() {
   const [auditEvents, setAuditEvents] = useState([]);
   const [auditVerified, setAuditVerified] = useState(null);
   const [speechStatus, setSpeechStatus] = useState("");
+  const [voiceReplies, setVoiceReplies] = useState(() => {
+    try { return window.localStorage.getItem("aurix.voiceReplies") !== "off"; }
+    catch { return true; }
+  });
+  const speakReply = useCallback(async (text) => {
+    if (!isTauri() || !text || text.startsWith("Error:")) return;
+    try {
+      await invoke("stop_speech");
+      await invoke("speak_text", { text: String(text).slice(0, 800) });
+    } catch {
+      // Speech is best effort; text is always retained.
+    }
+  }, []);
+  useEffect(() => {
+    try { window.localStorage.setItem("aurix.voiceReplies", voiceReplies ? "on" : "off"); }
+    catch {}
+  }, [voiceReplies]);
   const greeted = useRef(false);
   const [greeting, setGreeting] = useState("Initializing local assistant…");
   const [micError, setMicError] = useState("");
@@ -182,7 +199,7 @@ export default function App() {
             setMessages(m => [...m, { from: "aurix", text: intro }]);
             // The packaged Windows worker uses a built-in system voice when
             // Piper is not configured. WebView speech is the fallback.
-            void invoke("speak_text", { text: intro }).catch(() => {
+            if (voiceReplies) void invoke("speak_text", { text: intro }).catch(() => {
               try {
                 if ("speechSynthesis" in window && "SpeechSynthesisUtterance" in window) {
                   const say = new window.SpeechSynthesisUtterance(intro);
@@ -399,7 +416,9 @@ export default function App() {
           setMessages(m => [...m, { from: "aurix", text: "Please review the Windows permission dialog." }]);
           try {
             const reviewed = await invoke("execute_trust", { payload: { request: id } });
-            setMessages(m => [...m, { from: "aurix", text: reviewed.result || "Action finished." }]);
+            const outcome = reviewed.result || "Action finished.";
+            setMessages(m => [...m, { from: "aurix", text: outcome }]);
+            if (voiceReplies) void speakReply(outcome);
           } catch (error) {
             setMessages(m => [...m, { from: "aurix", text: "Approval was not completed: " + String(error) }]);
           }
@@ -407,7 +426,9 @@ export default function App() {
           setMessages((m) => [...m, { from: "aurix", text: "Invalid approval request." }]);
         }
       } else {
-        setMessages((m) => [...m, { from: "aurix", text: reply || "No response." }]);
+        const answer = reply || "No response.";
+        setMessages((m) => [...m, { from: "aurix", text: answer }]);
+        if (voiceReplies) void speakReply(answer);
       }
     } catch (error) {
       setMessages((m) => [...m, {
@@ -416,7 +437,7 @@ export default function App() {
     } finally {
       setStatus("standby");
     }
-  }, []);
+  }, [voiceReplies, speakReply]);
 
   useEffect(() => {
     if (!workerOnline || !isTauri()) return;
@@ -831,7 +852,10 @@ export default function App() {
 
         <section className="panel panel-chat">
           <h3 className="panel-title">Chat</h3>
-          <div className="speech-controls" role="group" aria-label="Local Piper voice controls">
+          <div className="speech-controls" role="group" aria-label="LUNA voice controls">
+            <button type="button" aria-pressed={voiceReplies} onClick={() => setVoiceReplies(v => !v)}>
+              Spoken replies: {voiceReplies ? "ON" : "OFF"}
+            </button>
             <button type="button" onClick={speakLastReply} disabled={!workerOnline || !lastAssistantReply}>Speak last reply</button>
             <button type="button" onClick={stopSpeech} disabled={!workerOnline}>Stop speech</button>
           </div>
