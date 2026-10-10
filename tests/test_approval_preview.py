@@ -13,7 +13,8 @@ def test_outbound_email_preview_contains_complete_message():
     message = "project proposal " * 24
     args = {"to": "recipient@example.com", "subject": "Proposal", "body": message}
     assert executor._validate_args("send_email", args) is None
-    assert message in executor._describe_action("send_email", args)
+    # Tool validation normalizes trailing whitespace before sending.
+    assert args["body"] in executor._describe_action("send_email", args)
 
 
 def test_oversized_communication_is_rejected():
