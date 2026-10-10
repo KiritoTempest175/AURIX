@@ -34,8 +34,8 @@ jobs:
         with:
           name: aurix-windows-unsigned-preview
           path: |
-            frontend/src-tauri/target/release/bundle/nsis/*.exe
-            frontend/src-tauri/target/release/bundle/msi/*.msi
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/msi/*.msi
           if-no-files-found: error
 
       # A preview release is published only for explicitly requested runs.
@@ -48,7 +48,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $tag = "v0.1.0-preview.${{ github.run_number }}"
-          $installerDir = 'frontend/src-tauri/target/release/bundle'
+          $installerDir = 'target/release/bundle'
           $assets = @(
             Get-ChildItem -Path "$installerDir/nsis" -Filter '*.exe' -File -ErrorAction SilentlyContinue
             Get-ChildItem -Path "$installerDir/msi" -Filter '*.msi' -File -ErrorAction SilentlyContinue

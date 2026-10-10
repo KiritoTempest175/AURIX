@@ -113,7 +113,7 @@ try {
     } finally {
         Pop-Location
     }
-    Write-Host 'Output: frontend/src-tauri/target/release/bundle'
+    Write-Host 'Output: target/release/bundle (Cargo workspace target directory)'
     Write-Warning 'This is an UNSIGNED preview. Test on a clean Windows VM before distribution.'
 } finally {
     [System.IO.File]::WriteAllText($configFile, $originalConfig)
