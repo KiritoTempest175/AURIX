@@ -14,6 +14,7 @@ def test_tags_are_strictly_validated():
     assert not valid_model("http://external.example")
     assert not valid_model("../../bad")
     assert not valid_model(" ; powershell")
+    assert not valid_model("gpt-oss:20b-cloud")
 
 
 def test_no_uninstalled_model_activation(tmp_path, monkeypatch):

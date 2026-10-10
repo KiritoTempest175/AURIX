@@ -30,13 +30,21 @@ RECOMMENDED_MODELS = [
     {"name": "gemma3:1b", "label": "Gemma 3 1B", "purpose": "Lightweight and CPU-friendly"},
     {"name": "qwen3:1.7b", "label": "Qwen3 1.7B", "purpose": "Small, multilingual assistant"},
     {"name": "gemma3:12b", "label": "Gemma 3 12B", "purpose": "Higher quality on larger hardware"},
+    {"name": "qwen3:14b", "label": "Qwen3 14B", "purpose": "Enhanced reasoning; larger local download"},
+    {"name": "gpt-oss:20b", "label": "gpt-oss 20B", "purpose": "Powerful local reasoning; roughly 14 GB download"},
+    {"name": "qwen3-coder:30b", "label": "Qwen3 Coder 30B", "purpose": "Coding and agent tasks; roughly 19 GB download"},
 ]
 SETTINGS_FILE = "model_selection.json"
 _LOCK = threading.RLock()
 
 
 def valid_model(name: str) -> bool:
-    return isinstance(name, str) and bool(MODEL_PATTERN.fullmatch(name)) and ".." not in name
+    return (
+        isinstance(name, str)
+        and bool(MODEL_PATTERN.fullmatch(name))
+        and ".." not in name
+        and not name.lower().endswith("-cloud")
+    )
 
 
 def _path() -> Path:

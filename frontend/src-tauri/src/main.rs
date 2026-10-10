@@ -249,6 +249,7 @@ async fn local_post(
 // installed service. All downloads and installations require a user gesture.
 fn valid_ollama_model(name: &str) -> bool {
     !name.is_empty() && name.len() <= 120 && !name.contains("..")
+        && !name.to_ascii_lowercase().ends_with("-cloud")
         && name.bytes().enumerate().all(|(i, byte)| {
             byte.is_ascii_alphanumeric() || (i > 0 &&
                 matches!(byte, b'-' | b'_' | b'.' | b'/' | b':'))
@@ -498,4 +499,17 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running AURIX");
+}
+
+#[cfg(test)]
+mod model_setup_tests {
+    use super::valid_ollama_model;
+    #[test]
+    fn only_local_model_tags_are_accepted() {
+        assert!(valid_ollama_model("qwen3:4b"));
+        assert!(valid_ollama_model("gpt-oss:20b"));
+        assert!(!valid_ollama_model("gpt-oss:20b-cloud"));
+        assert!(!valid_ollama_model("http://example.com/llm"));
+        assert!(!valid_ollama_model("../../cmd"));
+    }
 }
