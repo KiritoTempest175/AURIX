@@ -135,6 +135,8 @@ export default function App() {
   const logRef = useRef(null);
   const [approval, setApproval] = useState(null);
   const [workerOnline, setWorkerOnline] = useState(false);
+  const [workerIssue, setWorkerIssue] = useState(null);
+  const [workerRestarting, setWorkerRestarting] = useState(false);
   const [approving, setApproving] = useState(false);
   const [activeView, setActiveView] = useState("Command");
   const [settings, setSettings] = useState(null);
@@ -161,9 +163,19 @@ export default function App() {
     const check = async () => {
       try {
         const ready = await invoke("get_bridge_health");
-        if (active) setWorkerOnline(Boolean(ready));
+        if (!active) return;
+        setWorkerOnline(Boolean(ready));
+        if (ready) {
+          setWorkerIssue(null);
+        } else {
+          const detail = await invoke("get_worker_diagnostics").catch(() => null);
+          if (active) setWorkerIssue(detail);
+        }
       } catch {
-        if (active) setWorkerOnline(false);
+        if (!active) return;
+        setWorkerOnline(false);
+        const detail = await invoke("get_worker_diagnostics").catch(() => null);
+        if (active) setWorkerIssue(detail);
       }
     };
     check();
@@ -186,6 +198,20 @@ export default function App() {
     }).catch(() => {});
     return () => { active = false; };
   }, [workerOnline]);
+
+  const retryWorker = async () => {
+    if (!isTauri() || workerRestarting) return;
+    setWorkerRestarting(true);
+    try {
+      const message = await invoke("restart_ai_worker");
+      setWorkerIssue({ state: "starting", message });
+      setWorkerOnline(false);
+    } catch (error) {
+      setWorkerIssue({ state: "failed", message: String(error) });
+    } finally {
+      setWorkerRestarting(false);
+    }
+  };
 
   const loadMemories = useCallback(async () => {
     if (!isTauri()) return;
@@ -469,6 +495,19 @@ export default function App() {
           </span>
         </header>
 
+
+        {!workerOnline && (
+          <section className="worker-alert" role="alert" aria-label="Local AI worker connection error">
+            <strong>Python AI worker disconnected</strong>
+            <p>{workerIssue?.message || "Waiting for the local AI worker to start..."}</p>
+            {workerIssue?.log_path && (
+              <p className="worker-log">Startup log: <code>{workerIssue.log_path}</code></p>
+            )}
+            <button type="button" disabled={workerRestarting} onClick={retryWorker}>
+              {workerRestarting ? "Restarting..." : "Retry worker"}
+            </button>
+          </section>
+        )}
 
         {activeView === "Command" ? (
           <>

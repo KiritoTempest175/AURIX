@@ -18,6 +18,8 @@ struct BridgeState {
     token: String,
     process: Mutex<Option<Child>>,
     client: reqwest::Client,
+    startup_error: Mutex<String>,
+    log_path: PathBuf,
 }
 
 impl Drop for BridgeState {
@@ -53,35 +55,129 @@ fn discover_root() -> Option<PathBuf> {
     None
 }
 
-/// An installer-built PyInstaller one-file sidecar is deployed beside AURIX.exe.
-/// Never fetch or run executables from arbitrary locations.
-fn spawn_bundled_worker(token: &str) -> Option<Child> {
-    let app_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+/// Installer-built onefile sidecar is deployed beside AURIX.exe.
+///
+/// Do not execute arbitrary files from the working directory. Source mode
+/// remains available exclusively from an existing project checkout.
+fn worker_log_path() -> PathBuf {
+    if let Some(custom) = std::env::var_os("AURIX_DATA_DIR") {
+        return PathBuf::from(custom).join("logs").join("worker.log");
+    }
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(local).join("AURIX").join("logs").join("worker.log");
+    }
+    std::env::temp_dir().join("AURIX").join("logs").join("worker.log")
+}
+
+fn spawn_bundled_worker(token: &str) -> Result<Child, String> {
+    let app_dir = std::env::current_exe()
+        .map_err(|_| "Cannot determine AURIX installation directory".to_string())?
+        .parent().ok_or("Cannot determine AURIX executable directory")?.to_path_buf();
     let candidate = app_dir.join("aurix-worker.exe");
     if !candidate.is_file() {
-        return None;
+        return Err("Packaged aurix-worker.exe is missing beside AURIX.exe. Rebuild/reinstall the installer.".into());
     }
     Command::new(candidate)
         .env("AURIX_BRIDGE_TOKEN", token)
         .env("AURIX_BRIDGE_HOST", "127.0.0.1")
-        .spawn().ok()
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|error| format!("Cannot launch the bundled worker ({:?}). Check antivirus quarantine and installation.", error.kind()))
 }
 
-fn spawn_bridge(root: &Path, token: &str) -> Option<Child> {
+fn spawn_bridge(root: &Path, token: &str) -> Result<Child, String> {
     let entry = root.join("frontend/bridge_server.py");
     for python in ["python", "python3"] {
-        let result = Command::new(python)
+        if let Ok(child) = Command::new(python)
             .arg(&entry)
             .current_dir(root)
             .env("AURIX_BRIDGE_TOKEN", token)
             .env("AURIX_BRIDGE_HOST", "127.0.0.1")
-            .spawn();
-        if let Ok(child) = result {
-            return Some(child);
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            return Ok(child);
         }
     }
-    eprintln!("AURIX worker could not start: Python 3.10+ is required.");
-    None
+    Err("Python worker could not launch from source. Install Python 3.10+ and project dependencies.".into())
+}
+
+fn launch_worker(token: &str) -> Result<Child, String> {
+    let app_dir = std::env::current_exe()
+        .map_err(|_| "Cannot resolve AURIX executable".to_string())?
+        .parent().ok_or("Cannot resolve AURIX executable directory")?.to_path_buf();
+    if app_dir.join("aurix-worker.exe").is_file() {
+        return spawn_bundled_worker(token);
+    }
+    if let Some(root) = discover_root() {
+        return spawn_bridge(&root, token);
+    }
+    spawn_bundled_worker(token)
+}
+
+#[derive(Serialize)]
+struct WorkerDiagnostics {
+    state: &'static str,
+    message: String,
+    log_path: String,
+}
+
+#[tauri::command]
+fn get_worker_diagnostics(state: State<'_, BridgeState>) -> WorkerDiagnostics {
+    let log_path = state.log_path.to_string_lossy().into_owned();
+    let mut guard = match state.process.lock() {
+        Ok(lock) => lock,
+        Err(_) => return WorkerDiagnostics {
+            state: "failed", message: "Worker process state unavailable".into(), log_path,
+        },
+    };
+    if let Some(child) = guard.as_mut() {
+        match child.try_wait() {
+            Ok(Some(status)) => return WorkerDiagnostics {
+                state: "exited",
+                message: format!("Python worker exited ({status}). See the worker log or reinstall the app."),
+                log_path,
+            },
+            Ok(None) => return WorkerDiagnostics {
+                state: "starting",
+                message: "Worker process is running but has not responded yet. If this persists, check worker.log and local port 9721.".into(),
+                log_path,
+            },
+            Err(_) => return WorkerDiagnostics {
+                state: "failed",
+                message: "Cannot inspect the Python worker process".into(),
+                log_path,
+            },
+        }
+    }
+    WorkerDiagnostics {
+        state: "missing",
+        message: state.startup_error.lock().map(|x| x.clone())
+            .unwrap_or_else(|_| "Python worker did not start".into()),
+        log_path,
+    }
+}
+
+#[tauri::command]
+fn restart_ai_worker(state: State<'_, BridgeState>) -> Result<String, String> {
+    let mut guard = state.process.lock().map_err(|_| "Worker process lock unavailable")?;
+    if let Some(mut old) = guard.take() {
+        let _ = old.kill();
+        let _ = old.wait();
+    }
+    match launch_worker(&state.token) {
+        Ok(child) => {
+            *guard = Some(child);
+            if let Ok(mut message) = state.startup_error.lock() { message.clear(); }
+            Ok("Worker restarted. Allow a few seconds for initialization.".into())
+        }
+        Err(error) => {
+            if let Ok(mut message) = state.startup_error.lock() { *message = error.clone(); }
+            Err(error)
+        }
+    }
 }
 
 fn check_response(status: reqwest::StatusCode) -> Result<(), String> {
@@ -458,8 +554,11 @@ async fn resume_actions(state: State<'_, BridgeState>) -> Result<serde_json::Val
 
 fn main() {
     let token = secret();
-    let child = spawn_bundled_worker(&token)
-        .or_else(|| discover_root().and_then(|root| spawn_bridge(&root, &token)));
+    let worker_start = launch_worker(&token);
+    let (child, startup_error) = match worker_start {
+        Ok(child) => (Some(child), String::new()),
+        Err(error) => (None, error),
+    };
     let client = reqwest::Client::builder().timeout(Duration::from_secs(120))
         .build().expect("Unable to create local HTTP client");
     tauri::Builder::default()
@@ -489,9 +588,14 @@ fn main() {
             });
             Ok(())
         })
-        .manage(BridgeState { token, process: Mutex::new(child), client })
+        .manage(BridgeState {
+            token, process: Mutex::new(child), client,
+            startup_error: Mutex::new(startup_error),
+            log_path: worker_log_path(),
+        })
         .invoke_handler(tauri::generate_handler![
-            get_telemetry, get_bridge_telemetry, get_bridge_health, send_message, execute_trust,
+            get_telemetry, get_bridge_telemetry, get_bridge_health, get_worker_diagnostics,
+            restart_ai_worker, send_message, execute_trust,
             get_ui_settings, set_offline_mode, set_memory_enabled, list_memories, add_memory, delete_memory,
             listen_voice, speak_text, stop_speech,
             kill_actions, resume_actions, list_activity, reject_trust,

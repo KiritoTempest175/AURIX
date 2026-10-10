@@ -849,3 +849,12 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .model-notice, .model-error { color: var(--warn, #eebc72); }
 .model-progress progress { display: block; width: 100%; margin-top: 8px; }
 @media (prefers-reduced-motion: reduce) { .models-panel * { transition: none !important; } }
+
+/* Fail visibly if the installed Python sidecar is absent or exited. */
+.worker-alert { margin: 12px 0 18px; border: 1px solid #9b6e43; background: rgba(154, 98, 35, .10); border-radius: 12px; padding: 14px; max-width: 100%; }
+.worker-alert strong { color: #f0bd82; }
+.worker-alert p { margin: 6px 0 12px; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.worker-alert .worker-log { font-size: 11px; }
+.worker-alert code { white-space: normal; overflow-wrap: anywhere; user-select: text; }
+.worker-alert button { padding: 8px 12px; background: transparent; color: inherit; border: 1px solid #af875d; border-radius: 8px; cursor: pointer; }
+.worker-alert button:disabled { opacity: .55; cursor: wait; }

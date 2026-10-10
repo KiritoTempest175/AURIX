@@ -39,6 +39,51 @@ try {
     & $python @arguments
     if ($LASTEXITCODE -ne 0) { throw 'PyInstaller sidecar build failed' }
 
+    # Real frozen worker startup/authenticated API smoke check.
+# Checks the actual frozen EXE before packaging it. A successful Rust/React
+# compilation alone does not prove that the Python sidecar can start.
+$token = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+$oldToken = $env:AURIX_BRIDGE_TOKEN
+$env:AURIX_BRIDGE_TOKEN = $token
+$proc = $null
+try {
+    $proc = Start-Process -FilePath $source -WorkingDirectory $root -WindowStyle Hidden -PassThru
+    $ready = $false
+    $deadline = (Get-Date).AddSeconds(75)
+    $headers = @{ Authorization = "Bearer $token" }
+    do {
+        Start-Sleep -Milliseconds 750
+        if ($proc.HasExited) { throw "Packaged worker exited early with code $($proc.ExitCode)" }
+        try {
+            $health = Invoke-RestMethod -Uri 'http://127.0.0.1:9721/health' -Headers $headers -TimeoutSec 4
+            if ($health.status -eq 'ok') {
+                $settings = Invoke-RestMethod -Uri 'http://127.0.0.1:9721/settings' -Headers $headers -TimeoutSec 4
+                $models = Invoke-RestMethod -Uri 'http://127.0.0.1:9721/models' -Headers $headers -TimeoutSec 8
+                if ($null -eq $settings.offline -or $null -eq $models.recommendations) {
+                    throw 'Worker API is incomplete'
+                }
+                $ready = $true
+                break
+            }
+        } catch {
+            # PyInstaller onefile may still be extracting, retry until deadline.
+        }
+    } while ((Get-Date) -lt $deadline)
+    if (-not $ready) { throw 'Packaged worker did not become ready within 75 seconds' }
+    Write-Host 'Frozen worker smoke test passed: /health /settings /models'
+} catch {
+    $logPath = Join-Path $env:LOCALAPPDATA 'AURIX/logs/worker.log'
+    if (Test-Path $logPath) {
+        Get-Content $logPath -Tail 60 | ForEach-Object { Write-Host $_ }
+    }
+    throw
+} finally {
+    if ($null -ne $proc -and -not $proc.HasExited) {
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    }
+    $env:AURIX_BRIDGE_TOKEN = $oldToken
+}
+
     $target = ((& rustc -vV) | Where-Object { $_ -match '^host: ' }) -replace '^host: ', ''
     if (-not $target) { throw 'Could not detect Rust build target' }
     New-Item -ItemType Directory -Force $binaryDir | Out-Null

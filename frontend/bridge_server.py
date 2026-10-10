@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import secrets
 import sys
@@ -18,7 +19,7 @@ from pathlib import Path
 SOURCE_ROOT = Path(__file__).resolve().parent.parent
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
-from security.config_loader import program_root, install_user_config
+from security.config_loader import program_root, install_user_config, user_data_root
 ROOT = program_root()
 
 LOG = logging.getLogger("aurix.bridge")
@@ -316,8 +317,21 @@ class BridgeHandler(BaseHTTPRequestHandler):
         LOG.debug(fmt, *args)
 
 
+def configure_worker_logging() -> Path:
+    """Keep startup errors visible even in a --noconsole Windows executable."""
+    path = user_data_root() / "logs" / "worker.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[RotatingFileHandler(path, maxBytes=1_000_000, backupCount=2, encoding="utf-8")],
+        force=True,
+    )
+    return path
+
+
 def main():
-    logging.basicConfig(level=logging.INFO)
+    configure_worker_logging()
+    LOG.info("Starting AURIX Python bridge")
     if getattr(sys, "frozen", False):
         install_user_config()
     token = os.environ.get("AURIX_BRIDGE_TOKEN", "")
@@ -347,4 +361,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException:
+        LOG.exception("AURIX worker startup failed")
+        raise

@@ -1,6 +1,14 @@
 name: Windows Installer Preview
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'installer/**'
+      - 'frontend/src-tauri/**'
+      - 'frontend/bridge_server.py'
+      - 'frontend/src/**'
+      - 'pyproject.toml'
 permissions:
   contents: read
 jobs:
