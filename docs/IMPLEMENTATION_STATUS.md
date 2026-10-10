@@ -41,7 +41,7 @@ Updated: 2026-10-10. Status is based on code changes, not an executed Windows pe
 - Measured near-zero idle resources and hard per-process VRAM limits.
 - Rust telemetry history and CSV exports.
 - Full git/software installation/IDE/email/WhatsApp action set with risk tiers.
-- Encrypted searchable second brain and memory-management UI.
+- Complete second brain: encrypted, opt-in SQLite memory is being introduced; vector semantics, conflict resolution, full explorer UI, and tested key rotation remain outstanding.
 - Evaluated QLoRA adapters with genuine loss/progress reporting and rollback, beyond the gated training subprocess.
 - Signed single installer, updater, system tray, global kill switch and accessibility audit.
 

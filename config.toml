@@ -37,6 +37,11 @@ piper_speed = 1.00
 auto_tts_reply = true
 
 
+[memory]
+enabled = false # Opt-in; requires Windows DPAPI.
+max_retrieval_entries = 5
+max_history_scan = 300
+
 [resources]
 
 max_ram_gb = 12.0
