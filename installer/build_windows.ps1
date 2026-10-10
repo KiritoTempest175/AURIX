@@ -39,6 +39,9 @@ try {
     & $python @arguments
     if ($LASTEXITCODE -ne 0) { throw 'PyInstaller sidecar build failed' }
 
+    $source = Join-Path $buildPath 'dist/aurix-worker.exe'
+    if (-not (Test-Path $source)) { throw 'PyInstaller output is missing' }
+
     # Real frozen worker startup/authenticated API smoke check.
 # Checks the actual frozen EXE before packaging it. A successful Rust/React
 # compilation alone does not prove that the Python sidecar can start.
@@ -90,7 +93,6 @@ try {
     $target = ((& rustc -vV) | Where-Object { $_ -match '^host: ' }) -replace '^host: ', ''
     if (-not $target) { throw 'Could not detect Rust build target' }
     New-Item -ItemType Directory -Force $binaryDir | Out-Null
-    $source = Join-Path $buildPath 'dist/aurix-worker.exe'
     $bundled = Join-Path $binaryDir "aurix-worker-$target.exe"
     Copy-Item -Force $source $bundled
 
