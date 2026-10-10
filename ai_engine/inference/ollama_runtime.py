@@ -55,13 +55,13 @@ def _path() -> Path:
 def selection() -> dict[str, str]:
     defaults = load_config().get("llm", {})
     result = {
-        "backend": str(defaults.get("backend", "ollama")),
+        "backend": "ollama",
         "model": str(defaults.get("ollama_model", "qwen3:4b")),
     }
     try:
         data = json.loads(_path().read_text(encoding="utf-8"))
-        if isinstance(data, dict) and data.get("backend") in {"ollama", "llama_cpp"}:
-            result["backend"] = data["backend"]
+        if isinstance(data, dict) and data.get("backend") == "ollama":
+            result["backend"] = "ollama"
             if valid_model(data.get("model", "")):
                 result["model"] = data["model"]
     except (OSError, ValueError, TypeError):
@@ -70,15 +70,14 @@ def selection() -> dict[str, str]:
 
 
 def set_selection(backend: str, model: str) -> dict[str, str]:
-    if backend not in {"ollama", "llama_cpp"}:
+    if backend != "ollama":
         raise ValueError("INVALID_BACKEND")
     if not valid_model(model):
         raise ValueError("INVALID_MODEL")
     with _LOCK:
-        if backend == "ollama":
-            local = installed_models()
-            if model not in local:
-                raise ValueError("MODEL_NOT_INSTALLED")
+        local = installed_models()
+        if model not in local:
+            raise ValueError("MODEL_NOT_INSTALLED")
         path = _path()
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {"backend": backend, "model": model}
@@ -152,7 +151,7 @@ class OllamaRunner:
                 "model": self.model_name,
                 "messages": messages,
                 "stream": False,
-                "keep_alive": "2m",
+                "keep_alive": "30s",
                 "options": {"num_predict": max_tokens, "temperature": temperature},
             },
             timeout=120,
@@ -250,10 +249,7 @@ def get_model_runner():
     """Resolve selection on each access so changing model takes effect live."""
     global _RUNNER
     picked = selection()
-    if picked["backend"] == "llama_cpp":
-        from ai_engine.inference.local_gguf import get_default_local_runner
-        return get_default_local_runner()
-    with _LOCK:
+     with _LOCK:
         if _RUNNER is None or _RUNNER.model_name != picked["model"]:
             _RUNNER = OllamaRunner(picked["model"])
         return _RUNNER

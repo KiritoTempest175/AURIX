@@ -115,9 +115,9 @@ fn test_system_state_cross_thread_visibility() {
 fn test_terminal_hook_echo_command() {
     // We initialise the Python interpreter once because execute_and_intercept
     // uses PyResult.  This is safe to call multiple times (idempotent).
-    pyo3::prepare_freethreaded_python();
+    Python::initialize();
 
-    Python::with_gil(|_py| {
+    Python::attach(|_py| {
         let hook = terminal_hook::TerminalHook::new();
 
         let result = hook
@@ -136,9 +136,9 @@ fn test_terminal_hook_echo_command() {
 
 #[test]
 fn test_terminal_hook_failing_command() {
-    pyo3::prepare_freethreaded_python();
+    Python::initialize();
 
-    Python::with_gil(|_py| {
+    Python::attach(|_py| {
         let hook = terminal_hook::TerminalHook::new();
 
         let result = hook
@@ -154,9 +154,9 @@ fn test_terminal_hook_failing_command() {
 
 #[test]
 fn test_uia_tree_observer_returns_json() {
-    pyo3::prepare_freethreaded_python();
+    Python::initialize();
 
-    Python::with_gil(|_py| {
+    Python::attach(|_py| {
         let observer = uia_tree::UIATreeObserver::new();
 
         match observer.capture_focused_element() {
@@ -183,9 +183,9 @@ fn test_uia_tree_observer_returns_json() {
 
 #[test]
 fn test_hardware_monitor_starts_without_crash() {
-    pyo3::prepare_freethreaded_python();
+    Python::initialize();
 
-    Python::with_gil(|_py| {
+    Python::attach(|_py| {
         // Start the monitor — this spawns a detached background thread.
         monitor::start_hardware_monitor();
 
@@ -224,9 +224,9 @@ fn test_idle_monitor_session_and_tick() {
 
 #[test]
 fn test_file_jail_accepts_valid_path() {
-    pyo3::prepare_freethreaded_python();
+    Python::initialize();
 
-    Python::with_gil(|_py| {
+    Python::attach(|_py| {
         let current_dir = std::env::current_dir()
             .expect("Failed to determine current working directory");
 
@@ -262,9 +262,9 @@ fn test_file_jail_accepts_valid_path() {
 
 #[test]
 fn test_full_integration_report() {
-    pyo3::prepare_freethreaded_python();
+    Python::initialize();
 
-    Python::with_gil(|_py| {
+    Python::attach(|_py| {
         println!("══════════════════════════════════════════════════");
         println!("  AURIX Core Engine — Integration Test Report     ");
         println!("══════════════════════════════════════════════════\n");

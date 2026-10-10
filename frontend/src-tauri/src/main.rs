@@ -389,7 +389,7 @@ async fn list_model_choices(state: State<'_, BridgeState>) -> Result<serde_json:
 async fn activate_model(
     backend: String, model: String, state: State<'_, BridgeState>
 ) -> Result<serde_json::Value, String> {
-    if !matches!(backend.as_str(), "ollama" | "llama_cpp") || !valid_ollama_model(&model) {
+    if backend != "ollama" || !valid_ollama_model(&model) {
         return Err("Invalid backend or model tag".into());
     }
     local_post(&state, "/models/activate", serde_json::json!({

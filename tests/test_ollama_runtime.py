@@ -27,9 +27,10 @@ def test_no_uninstalled_model_activation(tmp_path, monkeypatch):
         assert selection()["model"] == "qwen3:4b"
 
 
-def test_switch_backend_to_local_gguf(tmp_path, monkeypatch):
+def test_reject_non_ollama_backend(tmp_path, monkeypatch):
     monkeypatch.setenv("AURIX_DATA_DIR", str(tmp_path))
-    assert set_selection("llama_cpp", "qwen3:4b")["backend"] == "llama_cpp"
+    with pytest.raises(ValueError, match="INVALID_BACKEND"):
+        set_selection("llama_cpp", "qwen3:4b")
 
 
 def test_chat_is_local_and_does_not_train():

@@ -16,10 +16,23 @@ $app = $null
 try {
     $installed = Start-Process $installer.FullName -ArgumentList @('/S', "/D=$installDir") -PassThru -Wait
     if ($installed.ExitCode -ne 0) { throw "Installer exited with $($installed.ExitCode)" }
-    $exe = Join-Path $installDir 'AURIX.exe'
-    $worker = Join-Path $installDir 'aurix-worker.exe'
-    if (-not (Test-Path $exe)) { throw 'Installed AURIX.exe missing' }
-    if (-not (Test-Path $worker)) { throw 'Installed Python sidecar missing' }
+    # Tauri's Cargo binary name is aurix-desktop.exe even when the product
+    # title and installer are AURIX. Do not assume the displayed name is the
+    # installed executable name.
+    $appCandidates = @(
+        (Join-Path $installDir 'aurix-desktop.exe'),
+        (Join-Path $installDir 'AURIX.exe')
+    )
+    $exe = $appCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $exe) {
+        $found = (Get-ChildItem $installDir -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName) -join ', '
+        throw "Installed AURIX executable missing from $installDir; found: $found"
+    }
+    $worker = Join-Path (Split-Path $exe -Parent) 'aurix-worker.exe'
+    if (-not (Test-Path $worker)) {
+        throw "Installed Python sidecar missing beside $exe"
+    }
     $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
     $env:AURIX_DATA_DIR = $dataDir
     $env:AURIX_ROOT = $null

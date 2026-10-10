@@ -64,13 +64,7 @@ export default function ModelsPanel({ workerOnline, offline, onOfflineChange }) 
     invoke("activate_model", { backend: "ollama", model })
   );
 
-  const switchToGguf = () => perform("gguf", () =>
-    invoke("activate_model", {
-      backend: "llama_cpp", model: snapshot?.selected || "qwen3:4b",
-    })
-  );
-
-  const remove = (model) => perform(`delete:${model}`, () =>
+   const remove = (model) => perform(`delete:${model}`, () =>
     invoke("remove_ollama_model", { model })
   );
 
@@ -102,10 +96,7 @@ export default function ModelsPanel({ workerOnline, offline, onOfflineChange }) 
         <button type="button" disabled={!workerOnline || Boolean(busy) || offline} onClick={installOllama}>
           {busy === "install" ? "Installing Ollama..." : "Install Ollama (Windows)"}
         </button>
-        <button type="button" disabled={!workerOnline || Boolean(busy)} onClick={switchToGguf}>
-          Use existing GGUF backend
-        </button>
-      </div>
+       </div>
       {!snapshot?.ollama_connected && <p>Open Ollama after installation. AURIX will connect to its local service, not a cloud LLM API. Installation uses the official <strong>Ollama.Ollama</strong> winget package.</p>}
       {offline && (
         <div className="model-offline-controls">
@@ -159,7 +150,7 @@ export default function ModelsPanel({ workerOnline, offline, onOfflineChange }) 
       </div>}
       {status && <p role="status">{status}</p>}
       {error && <p role="alert" className="model-error">{error}</p>}
-      <p className="model-footnote">Model downloads require internet and disk space. The models themselves run locally after installation. Hardware acceleration depends on the available Ollama backend and drivers.</p>
+      <p className="model-footnote">Ollama is the only inference backend. Model weights are unloaded after a short idle period to reduce memory usage. Models must be downloaded once; subsequent inference runs locally.</p>
     </div>
   );
 }
