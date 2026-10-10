@@ -538,6 +538,16 @@ async fn delete_memory(id: String, state: State<'_, BridgeState>) -> Result<serd
 }
 
 #[tauri::command]
+async fn get_wake_status(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    local_get(&state, "/voice/wake").await
+}
+
+#[tauri::command]
+async fn set_wake_enabled(enabled: bool, state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
+    local_post(&state, "/voice/wake", serde_json::json!({"enabled": enabled})).await
+}
+
+#[tauri::command]
 async fn listen_voice(state: State<'_, BridgeState>) -> Result<serde_json::Value, String> {
     local_post(&state, "/voice/transcribe", serde_json::json!({})).await
 }
@@ -621,7 +631,7 @@ fn main() {
             restart_ai_worker, send_message, execute_trust,
             get_ui_settings, set_offline_mode, set_memory_enabled,
             email_configuration, save_email_configuration, remove_email_configuration, list_memories, add_memory, delete_memory,
-            listen_voice, speak_text, stop_speech,
+            listen_voice, get_wake_status, set_wake_enabled, speak_text, stop_speech,
             kill_actions, resume_actions, list_activity, reject_trust,
             get_telemetry_history, export_telemetry_csv,
             list_model_choices, activate_model, install_ollama, pull_ollama_model, remove_ollama_model

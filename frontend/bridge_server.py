@@ -159,6 +159,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 "installed": installed,
                 "recommendations": RECOMMENDED_MODELS,
             })
+        if self.path == "/voice/wake":
+            from native_ui.audio.wake_service import status, drain_events
+            return self._json({**status(), "events": drain_events()})
         if self.path == "/email/configure":
             from ai_brain.email_control import EmailController
             return self._json(EmailController().credentials_status())
@@ -225,6 +228,14 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 return self._json({"error": code}, 400)
             except (OSError, TimeoutError):
                 return self._json({"error": "OLLAMA_UNAVAILABLE"}, 503)
+        if self.path == "/voice/wake":
+            from native_ui.audio.wake_service import configure
+            if set(data) != {"enabled"} or type(data["enabled"]) is not bool:
+                return self._json({"error": "INVALID_WAKE_SETTING"}, 400)
+            try:
+                return self._json(configure(data["enabled"]))
+            except (OSError, ValueError):
+                return self._json({"error": "WAKE_SETTING_FAILED"}, 503)
         if self.path == "/email/configure":
             from ai_brain.email_control import EmailController
             ctrl = EmailController()
@@ -300,7 +311,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 return self._json({"text": transcribe_microphone()})
             except RuntimeError as exc:
                 reason = str(exc)
-                code = reason if reason in {"NO_STT_MODEL", "VOICE_BUSY", "VOICE_DEPENDENCY_MISSING"} else "VOICE_UNAVAILABLE"
+                code = reason if reason in {"NO_STT_MODEL", "VOICE_BUSY", "VOICE_DEPENDENCY_MISSING", "WINDOWS_SPEECH_UNAVAILABLE"} else "VOICE_UNAVAILABLE"
                 return self._json({"error": code}, 503)
             except Exception:
                 LOG.exception("Local STT failed")

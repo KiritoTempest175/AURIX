@@ -156,6 +156,8 @@ export default function App() {
   const greeted = useRef(false);
   const [greeting, setGreeting] = useState("Initializing local assistant…");
   const [micError, setMicError] = useState("");
+  const [wake, setWake] = useState({ enabled: false, listening: false, backend: "unavailable", error: "" });
+  const [wakeUpdating, setWakeUpdating] = useState(false);
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -408,6 +410,56 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    if (!workerOnline || !isTauri()) return;
+    let live = true;
+    let checking = false;
+    const checkWake = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const result = await invoke("get_wake_status");
+        if (!live) return;
+        setWake({
+          enabled: Boolean(result.enabled), listening: Boolean(result.listening),
+          backend: result.backend || "unavailable", error: result.error || "",
+        });
+        for (const event of result.events || []) {
+          if (event.kind !== "wake") continue;
+          if (event.command) {
+            void sendText(event.command);
+          } else {
+            setMessages(items => [...items, { from: "aurix", text: "Yes, I'm listening. Press the mic and tell me what you need." }]);
+            try {
+              if ("speechSynthesis" in window && "SpeechSynthesisUtterance" in window) {
+                window.speechSynthesis.speak(new window.SpeechSynthesisUtterance("Yes, I'm listening."));
+              }
+            } catch {}
+          }
+        }
+      } catch {
+        if (live) setWake(prev => ({ ...prev, error: "Wake service unavailable" }));
+      } finally { checking = false; }
+    };
+    void checkWake();
+    const timer = window.setInterval(checkWake, 2500);
+    return () => { live = false; clearInterval(timer); };
+  }, [workerOnline, sendText]);
+
+  const updateWake = async () => {
+    if (!workerOnline || wakeUpdating) return;
+    if (!wake.enabled && !window.confirm(
+      "Enable background microphone listening for 'Hey Luna'? Audio will be processed locally and the setting will persist for future AURIX sessions."
+    )) return;
+    setWakeUpdating(true);
+    try {
+      const changed = await invoke("set_wake_enabled", { enabled: !wake.enabled });
+      setWake({ ...wake, ...changed });
+    } catch (error) {
+      setMicError("Wake listening configuration failed: " + String(error));
+    } finally { setWakeUpdating(false); }
+  };
+
   const sendMessage = async (event) => {
     event.preventDefault();
     if (status !== "standby") return;
@@ -422,7 +474,12 @@ export default function App() {
       return;
     }
     setStatus("listening");
+    const resumeWake = wake.enabled;
     try {
+      // The desktop microphone must not be captured by both listeners.
+      if (resumeWake) {
+        await invoke("set_wake_enabled", { enabled: false });
+      }
       const data = await invoke("listen_voice");
       if (data.text?.trim()) {
         await sendText(data.text);
@@ -437,6 +494,10 @@ export default function App() {
         from: "aurix", text: "Microphone unavailable. Review the Voice setup in System controls.",
       }]);
     } finally {
+      if (resumeWake) {
+        try { await invoke("set_wake_enabled", { enabled: true }); }
+        catch { setMicError("Couldn't resume wake listening; use System controls to re-enable it."); }
+      }
       setStatus("standby");
     }
   };
@@ -654,8 +715,17 @@ export default function App() {
               <>
                 <h2>System controls</h2>
                 <div className="setting-line">
+                  <div><strong>Hey Luna — local wake listening</strong>
+                    <p>{wake.enabled ? (wake.listening ? "Microphone listening for Hey Luna" : "Enabled, but microphone listener is not running") : "Disabled by default for privacy. Opt in once to enable at future launches."}</p>
+                    <p>Speech backend: {wake.backend.replace(/_/g, " ")} {wake.error && " · " + wake.error}</p>
+                  </div>
+                  <button type="button" onClick={updateWake} disabled={!workerOnline || wakeUpdating}>
+                    {wakeUpdating ? "Updating…" : wake.enabled ? "Turn off listening" : "Enable Hey Luna"}
+                  </button>
+                </div>
+                <div className="setting-line">
                   <div><strong>Voice & microphone</strong>
-                    <p>Click the microphone to record a local speech segment. Windows microphone access must be enabled. An offline Whisper model is needed for the current speech backend.</p>
+                    <p>Click the microphone to record a local speech segment. Windows microphone access must be enabled. AURIX tries the built-in Windows speech recognizer when an optional offline Whisper model is not installed; the appropriate Windows speech language must be available.</p>
                   </div>
                   <button type="button" onClick={handleMicPress} disabled={!workerOnline || status !== "standby"}>Test microphone</button>
                 </div>
