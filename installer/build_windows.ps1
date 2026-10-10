@@ -105,6 +105,10 @@ try {
     $configuration.bundle | Add-Member -NotePropertyName externalBin -NotePropertyValue @('binaries/aurix-worker') -Force
     $configuration | ConvertTo-Json -Depth 40 | Set-Content -Encoding utf8 $configFile
 
+    # Rebuild the AURIX icon used by the NSIS/MSI installers.
+    & $python (Join-Path $root 'installer/generate_icon.py')
+    if ($LASTEXITCODE -ne 0) { throw 'AURIX Windows icon generation failed' }
+
     Push-Location $frontend
     try {
         npm install --global npm@11.6.0

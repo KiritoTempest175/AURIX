@@ -1043,3 +1043,6 @@ body { background: var(--bg); color: var(--text); }
 .permission-guardrails { border:1px solid rgba(105,180,192,.3); border-radius:12px; padding:18px; margin-top:22px; background:rgba(65,185,182,.06); }
 .permission-guardrails strong {color:var(--accent);}
 .permission-guardrails p {line-height:1.6;}
+
+.brand .brand-mark { display:block; width:46px; height:46px; padding:0; background:transparent; border:0; box-shadow:0 0 22px rgba(96,199,240,.16); border-radius:13px; flex:0 0 46px; }
+.models-panel .model-actions button:disabled {opacity:.53;cursor:not-allowed;}

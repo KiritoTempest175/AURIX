@@ -573,7 +573,7 @@ export default function App() {
       {/* Left navigation */}
       <aside className="nav">
         <div className="brand">
-          <div className="brand-mark">A</div>
+          <img className="brand-mark" src="/aurix-mark.svg" alt="" />
           <div>
             <div className="brand-name">AURIX</div>
             <div className="brand-sub">on-device intelligence</div>

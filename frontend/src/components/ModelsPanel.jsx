@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 const NATIVE = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
-const OFFLINE_WARNING = "For installing Ollama or downloading models, turn OFF Offline Mode in System controls.";
+const OFFLINE_WARNING = "Enable model downloads to install Ollama or download a local model.";
 
 export default function ModelsPanel({ workerOnline, offline, onOfflineChange }) {
   const [snapshot, setSnapshot] = useState(null);
