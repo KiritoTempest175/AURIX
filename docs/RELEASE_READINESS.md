@@ -69,3 +69,12 @@ observed outcome and a redacted worker log for every failure.
 
 Do **not** assign 10/10 until security boundaries, hardware compatibility,
 accessibility and signed distribution are independently validated.
+
+
+## Desktop issue regression pass (October 10, 2026)
+
+The desktop preview includes fixes aimed at user-reported noisy/failed speech input, incomplete email proposal templates, and WhatsApp chat-header targeting. Local Windows speech recognition chooses a system-installed recognizer rather than requiring en-US and ignores weak short-word transcripts. Email bodies with placeholders such as `[Insert Project Name]`, `[Your Name]`, `TBD` or other fill-in fields are never sent. WhatsApp attempts additional accessible chat-header control types but **will not send to an unverifiable recipient**. If the desktop UI exposes no trustworthy contact name, contact selection requires a human-supported app-version fix.
+
+The Permission Center can persist approvals for selected low-risk operations, not blanket authorization for outgoing messages or calls. Replies are spoken by default until the owner disables voice output. Windows installed female voice is preferred; neural voice model support and actual speaker quality remain user acceptance checks. The brand sidebar uses `frontend/public/aurix-mark.svg` neon AURIX orbital monogram; Windows installer ICO branding still requires separate asset validation.
+
+**Physical acceptance still required:** verify recorded microphone transcription across accents/languages, WhatsApp chat identity + actual send/voice-note/call in a test account, spoken voice quality, CPU readout vs Task Manager after 30 seconds, and the email's exact approved subject/body in a received mailbox. The release must not be described as a certified 10/10 product before these checks succeed.
