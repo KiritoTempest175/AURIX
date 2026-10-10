@@ -18,7 +18,11 @@ try {
     $python = Join-Path $venv 'Scripts/python.exe'
     & $python -m pip install --upgrade pip setuptools wheel
     if ($LASTEXITCODE -ne 0) { throw 'pip bootstrap failed' }
-    & $python -m pip install -e "${root}[desktop]" 'pyinstaller>=6,<7'
+    & $python -m pip install --require-hashes -r (Join-Path $PSScriptRoot 'requirements-desktop.lock')
+    if ($LASTEXITCODE -ne 0) { throw 'Locked runtime dependencies could not be installed' }
+    & $python -m pip install --no-deps -e "${root}"
+    if ($LASTEXITCODE -ne 0) { throw 'Project install failed' }
+    & $python -m pip install 'pyinstaller>=6,<7'
     if ($LASTEXITCODE -ne 0) { throw 'Worker dependencies could not be installed' }
 
     $modelConfig = Join-Path $root 'config.toml'

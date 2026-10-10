@@ -119,3 +119,31 @@ def test_failed_import_preserves_existing_model(tmp_path, monkeypatch):
 def test_desktop_router_uses_embedded_model():
     from ai_brain import agent_router
     assert agent_router.get_model_runner is local_gguf.get_default_local_runner
+
+
+def test_close_requests_normal_window_close_instead_of_termination(monkeypatch):
+    from ai_brain import app_control
+    process = Mock(info={"pid": 123, "name": "notepad.exe"})
+    monkeypatch.setattr(app_control, "IS_WINDOWS", True)
+    with patch.object(app_control.psutil, "process_iter", return_value=[process]), patch.object(
+        app_control.AppCloser, "_request_window_close", return_value=1
+    ) as close:
+        message = app_control.AppCloser().close("notepad")
+    close.assert_called_once_with({123})
+    process.terminate.assert_not_called()
+    assert "save prompts" in message
+
+
+@pytest.mark.parametrize("section,value", [
+    ("memory", "enabled = 1"),
+    ("general", 'offline_mode = "false"'),
+    ("llm", "n_ctx = 1024.5"),
+    ("security", "allowed_project_paths = [42]"),
+])
+def test_invalid_config_types_fail_closed(tmp_path, monkeypatch, section, value):
+    from security.config_loader import load_config
+    config = tmp_path / "config.toml"
+    config.write_text(f"[{section}]\n{value}\n", encoding="utf-8")
+    monkeypatch.setenv("AURIX_CONFIG_PATH", str(config))
+    with pytest.raises(ValueError):
+        load_config()

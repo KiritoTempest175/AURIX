@@ -96,3 +96,7 @@ vault/
 .local_memory/
 *.enc
 *.secret
+
+frontend/test-results/
+frontend/playwright-report/
+installer-smoke.json

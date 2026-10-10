@@ -1,6 +1,8 @@
 name: Windows Installer Preview
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
     paths:
@@ -15,10 +17,9 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write  # only the installer workflow can publish preview release assets
+  contents: read
 jobs:
   bundle:
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[publish-preview]') }}
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
@@ -35,50 +36,17 @@ jobs:
       - name: Build bundled worker and Tauri installer
         shell: pwsh
         run: ./installer/build_windows.ps1
+      - name: Test actual installed application without developer runtimes on PATH
+        shell: pwsh
+        run: ./installer/smoke_installed.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: aurix-windows-unsigned-preview
           path: |
             target/release/bundle/nsis/*.exe
             target/release/bundle/msi/*.msi
+            installer-smoke.json
           if-no-files-found: error
 
-      # A preview release is published only for explicitly requested runs.
-      # Push builds continue to produce CI artifacts without creating releases.
-      - name: Publish versioned GitHub preview release
-        if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[publish-preview]')) }}
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $version = (Get-Content 'frontend/src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json).version
-          $tag = "v$version-preview.${{ github.run_number }}"
-          $installerDir = 'target/release/bundle'
-          $assets = @(
-            Get-ChildItem -Path "$installerDir/nsis" -Filter '*.exe' -File -ErrorAction SilentlyContinue
-            Get-ChildItem -Path "$installerDir/msi" -Filter '*.msi' -File -ErrorAction SilentlyContinue
-          ) | Where-Object { $null -ne $_ }
-          if ($assets.Count -eq 0) { throw 'No Windows installer was produced. Refusing to publish an empty release.' }
-          $checksums = foreach ($asset in $assets) {
-            $hash = (Get-FileHash -Path $asset.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($asset.Name)"
-          }
-          $checksums | Set-Content -Path 'SHA256SUMS.txt' -Encoding utf8
-          @'
-          # AURIX 0.2 — Windows desktop preview
-
-          Unsigned development build for Windows 10/11 testing, not a production release.
-
-          **Install:** Download the .exe (NSIS installer) or .msi from Assets below. You do not need to install both.
-
-          **First run:** AURIX launches a bundled local Python worker. In Models, choose Enable model downloads to install Ollama and download a local model. All downloads require approval.
-
-          **Known limitations:** Windows installer and local model flows are not independently validated on end-user PCs; code signing and updates are not implemented. Native named-pipe IPC, full voice interaction, and sandboxed shell execution remain unfinished.
-
-          Source is committed directly to main. SHA256SUMS.txt lists hashes for the installer downloads.
-          '@ | Set-Content -Path 'preview-release-notes.md' -Encoding utf8
-          $paths = @($assets | ForEach-Object { $_.FullName })
-          $paths += (Resolve-Path 'SHA256SUMS.txt').Path
-          gh release create $tag @paths --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AURIX $tag — Windows Preview" --notes-file 'preview-release-notes.md' --prerelease --latest=false
-          if ($LASTEXITCODE -ne 0) { throw "GitHub preview release creation failed" }
+      # Publication is deliberately separate from build verification. A passing
+      # artifact build is not clean-VM, microphone, signing or inference evidence.

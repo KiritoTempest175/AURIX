@@ -1,142 +1,83 @@
-# AURIX — Autonomous Universal Reasoning & Interaction Executive
+# AURIX / LUNA
 
-AURIX is an **experimental Windows desktop AI assistant**. The application UI is built with React 18, Vite and Tauri 2; the current AI worker and automation tools are written in Python, with Windows-focused Rust native modules. The conversational AI agent is named **LUNA**.
+AURIX is a Windows desktop assistant under development. LUNA is its conversational persona. The desktop uses React/Vite, Tauri/Rust, and an owned Python worker. **This branch is a release-hardening candidate, not a production release.** See [release evidence and open gates](docs/RELEASE_READINESS.md).
 
-> **Release status: development preview, not a production-safe autonomous agent.** The security hardening in this repository is partial. Do not run the app with administrator privileges or allow untrusted users to access its environment.
+## Current behavior
 
-## Implemented in the current repository
+- Text chat and tool routing use an embedded `llama-cpp-python` GGUF backend. The desktop does not require or install Ollama, and does not call a cloud LLM API.
+- Models are not bundled or downloaded automatically. In **Models**, enter a local GGUF file and its publisher's SHA-256 checksum; native confirmation precedes verified import. A valid digest does not prove model compatibility.
+- Model loading is lazy. The idle reaper explicitly closes the model after the configured timeout and retains bounded conversation history. This does not establish a measured idle-resource guarantee.
+- Known application names route without a model. Opening allowlisted apps does not prompt. Closing requests a normal Windows close, allowing the app to show save prompts.
+- Sensitive tool actions require a native preview, an expiring single-use approval, and policy checks. Generic shell execution is disabled.
+- “Luna stop” and the UI stop control block new actions, invalidate earlier approvals and request speech cancellation. They do **not** guarantee immediate cancellation of every already-running process or external action.
+- Microphone input uses locally installed faster-whisper weights or Windows speech recognition. Speech uses configured Piper resources or installed Windows voices. Wake mode is opt-in and suppresses recognition during assistant speech; barge-in is not implemented.
+- Memory is opt-in, AES-GCM encrypted in SQLite, with a DPAPI-protected key on Windows. Retrieval is keyword/recency based, not vector retrieval. The initial Memory Explorer supports add/list/delete.
+- Native telemetry provides CPU/RAM and NVIDIA metrics when available, history and CSV export. Missing GPU metrics are shown as unavailable.
+- SMTP credentials are stored locally with Windows protection. Email and WhatsApp sends/calls are approval gated. Their real delivery flows need Windows/account testing; webmail automation and reliable autonomous calls are not complete.
 
-- Inference-only local desktop chat routed to user-selected Ollama or direct GGUF models. Ollama manages local model storage and supported GPU/CPU acceleration.
-- Rust telemetry for CPU/RAM and, when supported, GPU utilization, temperature and VRAM. Raw data persists in an app-local SQLite database for 24 hours, one-minute aggregates for 30 days and hourly aggregates without automatic expiry. A telemetry history chart shows 1h/24h/7d and can export CSV to app data. No per-process GPU ownership is claimed.
-- Desktop application and file tool implementations with action-level permission requests.
-- Single-use, fingerprint-bound pending action tokens, with a Windows native confirmation dialog for requests made through the Tauri UI.
-- Session-secret-authenticated **localhost-only HTTP** between Tauri and the Python worker. Browser-origin requests and arbitrary hosts are rejected; JavaScript does not receive the token.
-- Encryption/checkpoint code, secret scrubbing, SQLite-based telemetry tools, and automated Python/Rust tests.
-- Opt-in AES-GCM encrypted SQLite memory and Windows DPAPI key storage, with a basic Memory Explorer panel.
-- **No training is performed or required in the active assistant.** Older QLoRA research modules remain in the source tree for compatibility; they are not invoked by normal AURIX model selection or chat, and training dependencies are optional.
+## Privacy and security boundaries
 
-## Not yet implemented or validated
+The worker binds authenticated HTTP to `127.0.0.1`, rejects browser Origins, bounds request bodies and socket reads, and rejects new dispatches while inference is busy. The renderer never receives its session secret. The secret is removed from the worker environment before it can be inherited by launched applications. Release builds only start the installed worker, never a Python script from an arbitrary current directory.
 
-- A verified and signed one-click installer with auto-updater and full onboarding. An experimental unsigned PyInstaller/Tauri build script now exists.
-- Authenticated Windows named-pipe IPC; the loopback HTTP transport is temporary.
-- Always-on wake-word detection and interruptible voice playback. Push-to-talk now uses an optional local Whisper model when installed, otherwise reports unavailability.
-- A Windows restricted-token/Job-Object command sandbox; model-generated `shell_exec` is **disabled** until this exists.
-- The selected model must first be installed. Ollama is optional, and model downloads need explicit user approval. The direct GGUF backend remains an advanced alternative.
-- The system no longer imposes fixed RAM/VRAM allocation ceilings or GPU-model requirements. The governor reacts to low free-memory percentages and thermal warnings; GGUF uses available acceleration with a CPU fallback. Real-world idle, training and performance benchmarks remain unverified.
-- Complete role-based tool SDK, rollback/undo, persistent native approval audit, memory explorer, signed installer, and independent security assessment.
-- Online communications and software-installation workflows require explicit review; no guarantee is made that every action is fully offline.
+This is an interim transport. It is **not** a protected named pipe or a sandbox against a compromised Python worker. Native approval is not independent of Python execution. The action ledger is a local tamper-evident hash chain, not remote attestation. Do not use the current build for high-trust unattended automation.
 
-See [implementation status](docs/IMPLEMENTATION_STATUS.md) and [security model](docs/SECURITY.md) before using OS automation.
+Offline Mode blocks registered network-capable tools. It does not disconnect the machine or control traffic generated by other installed applications. This project does not claim to be air-gapped. Historical research/Ollama modules remain in the repository but are not used by the desktop model router. Never commit personal memory or credentials; see [history hygiene](docs/PRIVACY_HISTORY.md).
 
-## Requirements
+## Development on Windows
 
-Windows 10/11, Python 3.10+, Node.js 24+, compatible Rust/Tauri Windows prerequisites. Ollama is a free optional local model server. Use the in-app Models panel to install Ollama through the verified winget package and download/select a supported model. The alternative direct GGUF backend requires `llama-cpp-python` and a model file. Training is not required; CPU-only local inference is supported by compatible runtime/model combinations.
-
-## Development setup
+Requirements: Python 3.11, Node 24, a supported Rust toolchain, Windows build tools and WebView2. Developer tools are needed to build from source, not intended as end-user prerequisites.
 
 ```powershell
 git clone https://github.com/KiritoTempest175/AURIX.git
 cd AURIX
-py -3.10 -m venv .venv
+py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
-# Model setup is completed inside AURIX: Models → Install Ollama → Download model.
-# Advanced users may install llama-cpp-python and import local GGUF models.
+python -m pip install --require-hashes -r installer/requirements-desktop.lock
+python -m pip install --no-deps -e .
 cd frontend
-npm install
+npm ci
 npm run tauri dev
 ```
 
-Tauri now prefers an installer-bundled `aurix-worker.exe` beside its executable; source-mode development falls back to `frontend/bridge_server.py` using `python` or `python3` on PATH. Launching `npm run dev` **only runs the Vite browser preview**, where actions are unavailable. The packaged desktop binary is **not yet self-contained**. If the worker is missing, the UI will show it as unavailable.
+For tests/research development, install `.[dev]` separately. The dev extra intentionally contains larger optional research dependencies. Native source-worker discovery is enabled only in debug builds. User configuration lives under `%LOCALAPPDATA%\AURIX\config.toml` in a packaged installation. `AURIX_DATA_DIR` and `AURIX_CONFIG_PATH` support isolated testing.
 
-Optional native engine build from the repo root:
+## Models and voice setup
+
+Gemma 3n E4B Q4 is the requested main model; a compatible smaller GGUF can be imported for lower-memory machines. Compatibility and performance must be verified with the specific binary/model pairing. The pinned installer build currently uses the default CPU llama.cpp build. A CUDA-enabled distribution is not yet validated.
+
+For faster-whisper, place a complete local converted model at `[voice].stt_model_path`. There is no on-demand model download. For Piper, configure `[audio].piper_model_path` and install the Piper executable on PATH; otherwise Windows speech synthesis is attempted. Windows language packs and input devices vary, so an available backend is not proof of successful microphone capture.
+
+## Build and test
 
 ```powershell
-.\scripts\build_engine.ps1
+python -m pytest -q
 cargo test --workspace
-pytest
-```
-
-Do **not** enable public binding for the Python bridge. Its token is generated and supplied by Tauri at launch. Running `python frontend/bridge_server.py` directly refuses startup without this token.
-
-## Configuration
-
-`config.toml` is the active default for the tool executor and model runtime. `llm.backend="ollama"` selects local Ollama inference; a user-owned `model_selection.json` stores backend and model switching without changing tracked files. No model downloads occur automatically. Configure `security.allowed_project_paths` for workspace access. Empty trusted roots mean writes require explicit authorization and other Python file reads remain restricted to standard user folders. Legacy modules still contain other configuration defaults; consolidation is not finished.
-
-The current `[general].offline_mode` key is informational until every network-capable tool has been migrated to a central network policy. Do not treat this flag as a verified network isolation switch.
-
-`config/LUNA.md` is the non-personal LUNA persona file. User-specific vault content is intentionally not shipped. The historical Git repository may still contain old vault commits; follow [privacy history guidance](docs/PRIVACY_HISTORY.md).
-
-## Resource proof (measure, don't assume)
-
-AURIX has **targets**, not verified resource guarantees. To measure a running AURIX process:
-
-```powershell
-pip install psutil
-python scripts/resource_proof.py --pid <AURIX_PROCESS_PID> --seconds 60 --csv resource-proof.csv
-```
-
-The report measures the chosen process tree's RSS and CPU, plus system-wide GPU usage/VRAM when NVML is available. It does not claim per-process VRAM ownership. There are no fixed RAM or VRAM usage quotas.
-
-## Testing and CI
-
-`pytest` and `cargo test --workspace` are run in Windows GitHub Actions; a frontend compilation job is also included. The security regression tests cover unauthorized loopback clients, bad hosts, browser Origins and vault path containment. Passing CI is not equivalent to full security testing.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
-
-## Known limitations and participation
-
-This repo is an in-progress project. Contributions should not introduce fake model progress, hardcoded user paths, secrets, tracked personal memory or unsupported claims of offline operation. New external or destructive tool capabilities must have an auditable trusted-user authorization mechanism.
-
-## Windows installer preview (unsigned, unverified)
-
-Testing builds are available from [AURIX GitHub Releases](https://github.com/KiritoTempest175/AURIX/releases) **after the installer smoke test succeeds**. Choose the Windows .exe or .msi asset from the newest preview release; do not install both. A SHA256SUMS.txt checksum file is included. Preview releases are unsigned and are not production-safe.
-
-
-Run on a Windows workstation after installing the project prerequisites:
-
-```powershell
+cd frontend
+npm test
+npm run build
+npx playwright install chromium
+npm run test:ui
+cd ..
 pwsh ./installer/build_windows.ps1
+pwsh ./installer/smoke_installed.ps1
 ```
 
-The manual `Windows Installer Preview` workflow can also be dispatched in GitHub Actions. The script creates a PyInstaller one-file Python worker and temporarily configures Tauri to bundle it. Installer startup, Microsoft code signing, clean-machine functionality and updates still require verification; **do not distribute as a production release**.
+The installer build packages the Python worker and llama.cpp libraries, runs an authenticated frozen-worker smoke, and builds NSIS/MSI bundles under `target/release/bundle`. CI then installs and starts the app with Python/Node/Rust removed from PATH. That is a useful isolation check, **not a clean Windows VM test**. Browser tests check navigation and the Models panel at normal/minimum window sizes, including scoped axe checks; they do not exercise native Windows dialogs or audio hardware.
 
-Configuration is read through `security/config_loader.py`, preferring a private per-user TOML override under `%LOCALAPPDATA%/AURIX` over the bundled default. An explicitly supplied `AURIX_CONFIG_PATH` also works.
-
-Model weights are never downloaded automatically. To import an independently verified GGUF file:
+The Windows desktop dependency graph is pinned with hashes in `installer/requirements-desktop.lock`; frontend dependencies use `npm ci`. Update the runtime lock with:
 
 ```powershell
-python scripts/import_model.py C:\\models\\approved.gguf --sha256 YOUR_VERIFIED_64_HEX_DIGEST
+uv pip compile pyproject.toml --extra desktop --python-version 3.11 --python-platform x86_64-pc-windows-msvc --generate-hashes --output-file installer/requirements-desktop.lock
 ```
 
-The importer checks SHA-256 before copying into the per-user models directory. Update `[llm].model_path` to match the imported file.
+Build tooling and the Rust graph still need complete pinning. Security CI scans secrets and Python/Node/Rust dependencies. A scanner definition is not a successful scan; check the exact commit's results. Recommended branch protection: require successful CI/security/installer checks and review, disallow force pushes and deletion. No branch-protection settings are changed automatically.
 
-## Scoped Git operations
+## Resource proof
 
-LUNA can inspect Git status, commit files that the user has **already staged**, and push the currently checked-out branch to `origin` in an explicitly trusted project. Configure a single `security.allowed_project_paths` root for commands like "push it" without a path; multiple configured projects require clarification. Git commit and push require native approval; force-push and general shell execution remain disabled. Online push is blocked in Offline Mode. No agent command automatically stages the entire repository, because this could include secrets.
+`scripts/resource_proof.py` samples a running process tree. Run `python scripts/resource_proof.py --help`, then measure both idle and active sessions on the target Windows machine. Record application version, model checksum/context, hardware, drivers, sample duration and peak CPU/RAM/VRAM. Keep baseline and active reports with release evidence.
 
-## Quality and dependency checks
+No measured <1% CPU, <150 MB RAM, 6 GB VRAM ceiling or 12 GB RAM ceiling is claimed. The current wake pipeline and hosted CI cannot establish those targets.
 
-Windows CI now runs Python byte-compilation, pytest, Rust compilation and tests, frontend compilation, and Vitest telemetry unit tests. A separate scheduled/manual security workflow scans Git history for secrets and checks Python, npm, and Cargo advisories. Dependency scanning may identify legacy vulnerabilities; alerts must be resolved before any release. Dependabot opens update PRs for review. End-to-end Windows installer testing, native security review, coverage thresholds, and full lint normalization remain pending.
+## Architecture and remaining scope
 
-## Offline Piper speech (optional)
-
-Install the Piper CLI locally and put a genuine .onnx voice model at the path specified by the audio.piper_model_path setting. The chat panel offers Speak last reply and Stop speech. Text is passed to Piper through standard input with no shell expansion. Local Windows playback is attempted only when synthesis succeeds. Missing dependencies and missing model files produce explicit error messages. Model weights are not downloaded automatically. Streaming TTS, barge-in detection, and a continuously listening wake-word workflow remain unimplemented.
-
-## Memory privacy preference
-
-The desktop System panel can enable or disable opt-in persistent memory without editing the bundled TOML file. The choice is atomically stored in the user's private AURIX application directory. Enabling requires successful DPAPI key access on Windows. Disabling prevents further memory retrieval and conversation persistence but leaves previously saved encrypted records untouched; delete them individually through Memory Explorer. No claim of secure deletion from physical storage backups is made.
-
-## October 2026 desktop usability revision (v0.2.0 preview)
-
-- Redesigned the desktop palette, reduced bulky central elements and fixed independently scrolling workspaces and status/chat columns.
-- First-run welcome now displays and attempts to speak an explicit greeting after worker health checks pass. A persistent opt-in wake listener can listen for "Hey Luna" using an installed local Whisper model or the Windows system speech recognizer; on-device microphone compatibility remains to be validated.
-- Low-risk allowlisted applications (e.g. calculator, notepad, WhatsApp) can open and close without the former unnecessary double approval; arbitrary binaries, account messages and destructive actions still require a Windows-native confirmation.
-- Built-in narrow app command parsing works even before installing an Ollama model. In-app model downloading can be enabled without leaving the Models panel.
-- Gmail SMTP app passwords are entered in the Email panel and protected with Windows DPAPI in the current user's private application directory. Secrets are never returned to the UI. Sending remains an explicit review-and-approve operation.
-- Windows system speech output is a fallback when no Piper runtime is installed. Microphone transcription can fall back to installed Windows speech recognition if no Whisper model is configured.
-- Windows builds include optional desktop automation packages such as PyAutoGUI; no Python/Node/Rust developer tooling is required for end users of the installer.
-
-**Verification boundary:** CI unit tests and installer smoke tests are not equivalent to live device trials. Always-on speech, Windows language availability, third-party WhatsApp automation, SMTP delivery, privileged IPC hardening, secure OS process sandboxing, signed updates, clean machine trials, and accessibility audits remain unverified or incomplete. This is an unsigned testing release, not a certified production build.
+See [architecture](docs/ARCHITECTURE.md), [security](docs/SECURITY.md), and [release readiness](docs/RELEASE_READINESS.md). The requested monorepo migration, protected IPC, OS sandbox, complete undo, encrypted vector memory, real scheduled QLoRA, computer-use/IDE bridge, signed updater and full capability set remain work items. They are not implemented by documentation or disabled buttons.

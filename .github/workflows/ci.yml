@@ -60,3 +60,15 @@ jobs:
       - name: Frontend unit tests
         working-directory: frontend
         run: npm run test
+
+      - name: Install browser test runtime
+        working-directory: frontend
+        run: npx playwright install chromium
+      - name: UI and scoped accessibility tests
+        working-directory: frontend
+        run: npm run test:ui
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-browser-evidence
+          path: frontend/test-results/

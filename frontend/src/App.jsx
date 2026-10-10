@@ -168,7 +168,10 @@ export default function App() {
   useEffect(() => {
     if (!isTauri()) return;
     let active = true;
+    let checking = false;
     const check = async () => {
+      if (checking || !active) return;
+      checking = true;
       try {
         const ready = await invoke("get_bridge_health");
         if (!active) return;
@@ -177,7 +180,9 @@ export default function App() {
           setWorkerIssue(null);
           if (!greeted.current) {
             greeted.current = true;
-            const intro = "Hello. LUNA is online and ready.";
+            const hour = new Date().getHours();
+            const salutation = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+            const intro = `${salutation}. LUNA is here. What would you like to do?`;
             setGreeting(intro);
             setMessages(m => [...m, { from: "aurix", text: intro }]);
             // The packaged Windows worker uses a built-in system voice when
@@ -201,7 +206,7 @@ export default function App() {
         setWorkerOnline(false);
         const detail = await invoke("get_worker_diagnostics").catch(() => null);
         if (active) setWorkerIssue(detail);
-      }
+      } finally { checking = false; }
     };
     check();
     const pollId = setInterval(check, 5000);
@@ -574,7 +579,7 @@ export default function App() {
       {/* Center stage */}
       <main className="stage">
         <header className="stage-header">
-          <span className="date">AURIX / LUNA · {greeting.startsWith("Hello") ? "SYSTEM READY" : "STARTING"} · 
+          <span className="date">AURIX / LUNA · {workerOnline ? "WORKER READY" : "STARTING"} · 
             {new Date().toLocaleDateString("en-US", {
               weekday: "short",
               day: "numeric",

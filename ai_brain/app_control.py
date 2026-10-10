@@ -289,60 +289,62 @@ class AppCloser:
         
         logger.info("AppCloser: requested to close '%s' (searching for process: '%s')", raw, search_target)
 
-        killed_count = 0
-        errors = []
-
+        matching_pids = set()
+        aliases = {"google chrome": "chrome", "vs code": "code", "visual studio code": "code"}
+        expected = aliases.get(search_target, search_target).removesuffix(".exe")
+        if expected in self._PROTECTED:
+            return "Protected Windows processes cannot be closed."
         for proc in psutil.process_iter(["pid", "name"]):
             try:
-                proc_name = proc.info["name"] or ""
-                proc_name_lower = proc_name.lower()
-                proc_stem = os.path.splitext(proc_name_lower)[0]
-
-                if proc_stem in self._PROTECTED:
-                    continue
-
-                # Match against the TRANSLATED search_target, not the raw input
-                # Exact process name, never substring-match arbitrary programs.
-                aliases = {"chrome": "chrome", "google chrome": "chrome",
-                           "vs code": "code", "visual studio code": "code",
-                           "whatsapp": "whatsapp", "spotify": "spotify"}
-                match = aliases.get(search_target, search_target).removesuffix(".exe")
-                if proc_stem == match:
-                    proc.terminate()
-                    killed_count += 1
-            except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-                errors.append(f"{proc.info.get('name', 'Unknown')}: {e}")
+                stem = os.path.splitext((proc.info["name"] or "").lower())[0]
+                if stem == expected and stem not in self._PROTECTED:
+                    matching_pids.add(proc.info["pid"])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
+        if not matching_pids:
+            return f"No running application found matching: {raw}"
+        if not IS_WINDOWS:
+            return "Graceful application closing is supported on Windows only."
+        count = self._request_window_close(matching_pids)
+        if count:
+            return f"Requested close for {count} window(s) matching '{raw}'. Respond to any save prompts in the application."
+        return "No closable application window found. Background processes were left running."
 
-        if killed_count > 0:
-            return f"Successfully closed {killed_count} instance(s) matching '{raw}'."
-
-        if errors:
-            return f"Found processes but couldn't close them: {'; '.join(errors)}"
-
-        return f"No running application found matching: {raw}"
+    @staticmethod
+    def _request_window_close(pids: set[int]) -> int:
+        # WM_CLOSE lets the application display its own unsaved-work prompt.
+        # TerminateProcess/taskkill /F bypass those prompts and lose user data.
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+        user32.EnumWindows.restype = wintypes.BOOL
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        user32.IsWindowVisible.restype = wintypes.BOOL
+        user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.PostMessageW.restype = wintypes.BOOL
+        count = 0
+        @callback_type
+        def close_window(hwnd, _):
+            nonlocal count
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value in pids and user32.IsWindowVisible(hwnd):
+                if user32.PostMessageW(hwnd, 0x0010, 0, 0):
+                    count += 1
+            return True
+        if not user32.EnumWindows(close_window, 0):
+            raise OSError("Window enumeration unavailable")
+        return count
 
     def _fallback_close(self, target: str) -> str:
         """Fallback when psutil is not installed -- use taskkill on Windows."""
         if not IS_WINDOWS:
             return "Cannot close applications without psutil on this platform."
 
-        lower = target.strip().lower()
-        # Ensure the fallback closer also translates the alias
-        search_target = self._close_aliases.get(lower, lower)
-        
-        exe_name = search_target if search_target.endswith(".exe") else f"{search_target}.exe"
-        try:
-            result = subprocess.run(
-                ["taskkill", "/F", "/IM", exe_name, "/T"],
-                capture_output=True, text=True, errors="replace",
-            )
-            if result.returncode == 0:
-                return f"Closed {target}."
-        except Exception as e:
-            logger.error("AppCloser: taskkill failed for '%s': %s", exe_name, e)
-
-        return f"Could not find or terminate running application: {target}"
+        return "Process discovery unavailable. Install the packaged desktop dependencies."
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="[%(name)s] %(levelname)s: %(message)s")

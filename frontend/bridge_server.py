@@ -147,13 +147,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
             return self._json({"error": "UNAUTHORIZED"}, 401)
         if self.path == "/health":
             try:
-                from ai_engine.inference.local_gguf import get_default_local_runner as get_model_runner
-                runner = get_model_runner()
-                return self._json({
-                    "status": "ok", "model_ready": runner.is_available,
-                    "model_loaded": getattr(runner, "_model", None) is not None,
-                    "backend": runner.backend,
-                })
+                from ai_engine.inference.local_gguf import model_status
+                return self._json({"status": "ok", **model_status()})
             except Exception:
                 return self._json({"status": "ok", "model_ready": False, "model_loaded": False})
         if self.path == "/telemetry":

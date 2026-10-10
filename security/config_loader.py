@@ -59,6 +59,9 @@ def load_config() -> dict:
         data = tomllib.load(stream)
     if not isinstance(data, dict):
         raise ValueError("Invalid AURIX config")
+    for section in ("security", "resources", "llm", "memory", "voice", "audio", "general"):
+        if not isinstance(data.get(section, {}), dict):
+            raise ValueError(f"{section} must be a TOML section")
     resources = data.get("resources", {})
     if not isinstance(resources, dict):
         raise ValueError("resources must be a TOML section")
@@ -76,11 +79,19 @@ def load_config() -> dict:
         raise ValueError("resources.poll_interval_ms must be >= 500")
     # Legacy max_ram_gb and max_vram_gb keys are ignored: no fixed quotas.
     security = data.get("security", {})
-    if not isinstance(security.get("allowed_project_paths", []), list):
-        raise ValueError("security.allowed_project_paths must be a list")
+    paths = security.get("allowed_project_paths", [])
+    if not isinstance(paths, list) or any(not isinstance(p, str) or not p.strip() for p in paths):
+        raise ValueError("security.allowed_project_paths must be a list of non-empty strings")
     llm = data.get("llm", {})
-    if not (512 <= int(llm.get("n_ctx", 2048)) <= 8192):
+    context = llm.get("n_ctx", 2048)
+    if type(context) is not int or not 512 <= context <= 8192:
         raise ValueError("llm.n_ctx must be 512–8192")
-    if data.get("memory", {}).get("enabled", False) not in (True, False):
+    if type(data.get("memory", {}).get("enabled", False)) is not bool:
         raise ValueError("memory.enabled must be boolean")
+    if type(data.get("general", {}).get("offline_mode", True)) is not bool:
+        raise ValueError("general.offline_mode must be boolean")
+    for key, default, low, high in (("n_gpu_layers", -1, -1, 256), ("model_unload_after_seconds", 120, 30, 3600)):
+        value = llm.get(key, default)
+        if type(value) is not int or not low <= value <= high:
+            raise ValueError(f"llm.{key} must be an integer between {low} and {high}")
     return data

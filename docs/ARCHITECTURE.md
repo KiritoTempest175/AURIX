@@ -11,12 +11,12 @@ flowchart TD
   BS --> AR[BrainDispatcher / AgentRouter]
   AR --> TE[ToolExecutor / PermissionManager]
   TE --> AT[OS and communication tools]
-  AR --> LM[Legacy Transformers inference]
+  AR --> LM[Embedded GGUF inference]
   RS --> GOV[Native sysinfo telemetry]
   TE --> STO[Local files, SQLite, Markdown]
 ```
 
-The worker is currently a Python process that Rust starts from a development source checkout. It is not yet bundled in a standalone installer. Tool execution is serialized, and model inference can still block the worker request queue. The voice UI and live training status are incomplete.
+The release worker is packaged with PyInstaller and launched beside the installed desktop executable. Source-checkout discovery is debug-only. Dispatch is serialized with immediate busy rejection rather than a delayed action queue. Independent request threads handle health and emergency controls. Windows installer validation remains a release gate; see RELEASE_READINESS.md.
 
 ## Target architecture (planned; not implemented)
 
@@ -49,7 +49,7 @@ installer/       Signed desktop sidecar and MSI/NSIS workflow
 We deliberately retain the existing files until the code migration and build pipeline can be tested incrementally. Moving folders alone is not an architectural fix.
 
 ## Design constraints
-No model-generated OS action bypasses the native policy engine. Background AI work must have an independent resource budget and bounded queue. Personal data and model weights belong outside the repository and must have opt-in retention. Telemetry is actual measured data, with unobservable values represented as unavailable. Local/offline network policy requires enforcement by software, not just an LLM prompt.
+Target requirement: no model-generated OS action may bypass a native policy engine. The current policy engine is Python and does not yet meet that requirement. Background AI work must have an independent resource budget and bounded queue. Personal data and model weights belong outside the repository and must have opt-in retention. Telemetry is actual measured data, with unobservable values represented as unavailable. Local/offline network policy requires enforcement by software, not just an LLM prompt.
 
 ## Native telemetry history (added)
 

@@ -61,11 +61,11 @@ dev = [
     "datasets>=2.18.0"
 ]
 
-gguf = ["llama-cpp-python>=0.3.0"]
+gguf = ["llama-cpp-python==0.3.36"]
 
 # Installed inside packaged Windows desktop builds; no separate user pip setup.
 desktop = [
-    "llama-cpp-python>=0.3.0",
+    "llama-cpp-python==0.3.36",
     "pyautogui>=0.9.54; platform_system == 'Windows'",
     "sounddevice>=0.4.6; platform_system == 'Windows'",
     "faster-whisper>=1.0.0; platform_system == 'Windows'",
@@ -81,7 +81,7 @@ training = [
     "trl"
 ]
 
-gpu = ["llama-cpp-python>=0.3.0"]
+gpu = ["llama-cpp-python==0.3.36"]
 
 
 [tool.setuptools.packages.find]

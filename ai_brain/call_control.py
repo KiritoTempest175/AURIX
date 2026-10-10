@@ -396,7 +396,7 @@ class CallManager:
             return "Failed to automate the WhatsApp call interface."
 
         system_instruction = (
-            "You are Luna, an AI assistant calling on behalf of Huzaifa. "
+            "You are Luna, an AI assistant calling on behalf of the user. "
             f"Your specific goal for this call is: {vague_context}. "
             "Keep your answers extremely brief, conversational, and natural. "
             "Do not output stage directions, asterisks, or actions."

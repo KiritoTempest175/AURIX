@@ -1,3 +1,5 @@
+> Historical baseline. The updated source mapping and release evidence are in [RELEASE_READINESS.md](RELEASE_READINESS.md). The desktop model path has since changed to embedded GGUF; Ollama descriptions below document the earlier build.
+
 # AURIX finding-by-finding implementation tracker
 
 Updated: 2026-10-10. Status is based on code changes, not an executed Windows penetration test. **Fixed in source** is not equivalent to fully validated or production-ready.
