@@ -11,7 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # PyO3 for Python FFI and bindings
-pyo3 = { version = "0.20.0", features = ["extension-module", "abi3-py310"] }
+pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py310"] }
 
 # System monitoring for the Governor
 sysinfo = "0.30.5"

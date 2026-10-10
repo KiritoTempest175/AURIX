@@ -26,6 +26,6 @@ pub mod sandbox {
 
 /// The `core_engine` Python native module.
 #[pymodule]
-fn core_engine(_py: Python, m: &PyModule) -> PyResult<()> {
+fn core_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     ffi::register_ffi_bindings(m)
 }

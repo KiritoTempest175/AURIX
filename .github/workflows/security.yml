@@ -45,4 +45,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install cargo-audit --locked
-      - run: cargo audit --file core_engine/Cargo.lock
+      # The workspace root is authoritative; the old core_engine/Cargo.lock
+      # is historical and must not be used to certify current dependencies.
+      - run: cargo generate-lockfile
+      - run: cargo audit --file Cargo.lock

@@ -10,7 +10,7 @@ use crate::observers;
 use crate::sandbox;
 
 /// Registers all core engine classes and functions onto the given Python module.
-pub fn register_ffi_bindings(m: &PyModule) -> PyResult<()> {
+pub fn register_ffi_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Classes
     m.add_class::<governor::power_state::SystemState>()?;
     m.add_class::<observers::uia_tree::UIATreeObserver>()?;
