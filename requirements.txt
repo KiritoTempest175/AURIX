@@ -27,6 +27,6 @@ uvicorn>=0.28.0
 
 # Audio & Speech Subsystem
 sounddevice>=0.5.0
-SpeechRecognition>=3.10.0
+SpeechRecognition>=3.17.0
 piper-tts>=1.2.0
 
