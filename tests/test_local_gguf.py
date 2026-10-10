@@ -25,3 +25,14 @@ def test_history_is_bounded(tmp_path):
     for i in range(20):
         runner.remember_exchange(str(i), str(i))
     assert len(runner._history) == 12
+
+
+def test_gpu_preflight_disables_offload_without_nvml():
+    from ai_engine.inference.local_gguf import choose_gpu_layers
+    with patch.dict("sys.modules", {"pynvml": None}):
+        assert choose_gpu_layers(24) == 0
+
+
+def test_gpu_preflight_cpu_only_mode():
+    from ai_engine.inference.local_gguf import choose_gpu_layers
+    assert choose_gpu_layers(0) == 0
