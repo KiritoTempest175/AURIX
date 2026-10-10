@@ -92,6 +92,9 @@ This repo is an in-progress project. Contributions should not introduce fake mod
 
 ## Windows installer preview (unsigned, unverified)
 
+Testing builds are available from [AURIX GitHub Releases](https://github.com/KiritoTempest175/AURIX/releases) **after the installer smoke test succeeds**. Choose the Windows .exe or .msi asset from the newest preview release; do not install both. A SHA256SUMS.txt checksum file is included. Preview releases are unsigned and are not production-safe.
+
+
 Run on a Windows workstation after installing the project prerequisites:
 
 ```powershell
