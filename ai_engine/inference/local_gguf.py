@@ -41,6 +41,30 @@ def _local_path(raw: object) -> Optional[Path]:
     return p if p.is_file() and p.suffix.lower() == ".gguf" else None
 
 
+def choose_gpu_layers(requested_layers: int, max_vram_gb: float = 6.0) -> int:
+    """Conservative NVML preflight; not a hard per-process VRAM limit."""
+    if requested_layers <= 0:
+        return 0
+    try:
+        from pynvml import (
+            nvmlInit, nvmlDeviceGetHandleByIndex,
+            nvmlDeviceGetMemoryInfo, nvmlDeviceGetUtilizationRates
+        )
+        nvmlInit()
+        device = nvmlDeviceGetHandleByIndex(0)
+        mem = nvmlDeviceGetMemoryInfo(device)
+        busy = nvmlDeviceGetUtilizationRates(device).gpu
+        # Model weights are not total allocation; allow extra KV/scratch headroom.
+        ceiling = min(6.0, max_vram_gb) * (1024 ** 3)
+        if mem.free < ceiling or busy >= 70:
+            LOG.warning("GPU occupied or free VRAM below configured reserve; using CPU")
+            return 0
+        return requested_layers
+    except Exception as exc:
+        LOG.info("Cannot validate available VRAM (%s); using CPU", type(exc).__name__)
+        return 0
+
+
 class LocalGGUFRunner:
     """Lazy, synchronized GGUF inference with bounded conversation history."""
 
@@ -83,7 +107,7 @@ class LocalGGUFRunner:
         self._model = Llama(
             model_path=str(model_path),
             n_ctx=self.n_ctx,
-            n_gpu_layers=self.n_gpu_layers,
+            n_gpu_layers=choose_gpu_layers(self.n_gpu_layers),
             verbose=False,
         )
         self._last_used = time.monotonic()
