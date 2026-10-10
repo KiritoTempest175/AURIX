@@ -53,10 +53,23 @@ jobs:
           npm --version
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm install
+        run: npm ci
       - name: Compile frontend
         working-directory: frontend
         run: npm run build
       - name: Frontend unit tests
         working-directory: frontend
         run: npm run test
+      - name: Install test browser
+        working-directory: frontend
+        run: npx playwright install chromium
+      - name: Browser viewport and accessibility tests
+        working-directory: frontend
+        run: npm run test:ui
+      - name: Store browser artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aurix-browser-failure
+          path: frontend/test-results/
+          if-no-files-found: ignore
